@@ -2,21 +2,15 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IOrganization extends Document {
   name: string;
-  slug: string; // unique identifier (e.g., watching.com/gym-workspace)
+  slug: string;
   planTier: 'basic' | 'pro' | 'enterprise';
   subscriptionStatus: 'active' | 'past_due' | 'trialing' | 'canceled';
-  
-  // Meta Tech Provider Details
   metaConfig: {
     wabaId?: string;
     phoneNumberId?: string;
     accessToken?: string;
   };
-
-  // The Promotional Message Wallet
   walletBalance: number;
-
-  // Monthly Usage Counters
   usage: {
     aiTokensUsed: number;
     subscribersCount: number;
@@ -42,7 +36,7 @@ const OrganizationSchema: Schema = new Schema(
       phoneNumberId: { type: String, sparse: true },
       accessToken: { type: String },
     },
-    walletBalance: { type: Number, default: 0 },
+    walletBalance: { type: Number, default: 0 }, // For promotional msg credits
     usage: {
       aiTokensUsed: { type: Number, default: 0 },
       subscribersCount: { type: Number, default: 0 },

@@ -1,12 +1,14 @@
 import express, { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import { config } from './config';
 import { connectDB } from './loaders/database';
 import AppError from './utils/AppError';
 import globalErrorHandler from './middlewares/errorMiddleware';
 import orgRoutes from './routes/organizationRoutes';
+import userRoutes from './routes/userRoutes';
 
 const bootstrap = async () => {
   const app = express();
@@ -15,6 +17,7 @@ const bootstrap = async () => {
   app.use(helmet());
   app.use(cors());
   app.use(express.json());
+  app.use(cookieParser());
 
   // 2. Logger (Morgan)
   if (config.env === 'development') {
@@ -29,6 +32,7 @@ const bootstrap = async () => {
     res.status(200).send('OK');
   });
 
+  app.use('/api/v1/users', userRoutes);
   app.use('/api/v1/organizations', orgRoutes);
 
   // Using the named wildcard syntax '*path'

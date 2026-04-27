@@ -23,6 +23,11 @@ export const config = {
   port: parseInt(envVars.data.PORT, 10),
   env: envVars.data.NODE_ENV,
   mongoUri: envVars.data.MONGODB_URI,
+  emailHost: process.env.EMAIL_HOST,
+  emailPort: Number(process.env.EMAIL_PORT),
+  emailUser: process.env.EMAIL_USER,
+  emailPassword: process.env.EMAIL_PASSWORD,
+  emailFrom: process.env.EMAIL_FROM,
   jwtSecret: envVars.data.JWT_SECRET,
   meta: {
     appId: envVars.data.META_APP_ID,
