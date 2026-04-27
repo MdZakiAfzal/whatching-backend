@@ -1,8 +1,10 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import { config } from './config';
 import { connectDB } from './loaders/database';
+import AppError from './utils/AppError';
+import globalErrorHandler from './middlewares/errorMiddleware';
 
 const bootstrap = async () => {
   const app = express();
@@ -20,13 +22,18 @@ const bootstrap = async () => {
     res.status(200).send('OK');
   });
 
+  // Using the named wildcard syntax '*path'
+app.all('*path', (req: Request, res: Response, next: NextFunction) => {
+  next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
+});
+
+  // 3. Global Error Handling Middleware
+  // This must be the LAST middleware in the stack
+  app.use(globalErrorHandler);
+
   // 4. Start Listening
   app.listen(config.port, () => {
-    console.log(`
-      ✅ Server Started
-      🚀 Port: ${config.port}
-      🌍 Mode: ${config.env}
-    `);
+    console.log(`🚀 Server started on port: ${config.port}`);
   });
 };
 
