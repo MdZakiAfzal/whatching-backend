@@ -23,9 +23,9 @@ const bootstrap = async () => {
   });
 
   // Using the named wildcard syntax '*path'
-app.all('*path', (req: Request, res: Response, next: NextFunction) => {
-  next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
-});
+  app.all('*path', (req: Request, res: Response, next: NextFunction) => {
+    next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
+  });
 
   // 3. Global Error Handling Middleware
   // This must be the LAST middleware in the stack
