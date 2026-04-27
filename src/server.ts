@@ -1,10 +1,12 @@
 import express, { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
+import morgan from 'morgan';
 import { config } from './config';
 import { connectDB } from './loaders/database';
 import AppError from './utils/AppError';
 import globalErrorHandler from './middlewares/errorMiddleware';
+import orgRoutes from './routes/organizationRoutes';
 
 const bootstrap = async () => {
   const app = express();
@@ -14,13 +16,20 @@ const bootstrap = async () => {
   app.use(cors());
   app.use(express.json());
 
-  // 2. Connect to MongoDB Atlas
+  // 2. Logger (Morgan)
+  if (config.env === 'development') {
+    app.use(morgan('dev'));
+  }
+
+  // 3. Connect to MongoDB Atlas
   await connectDB();
 
   // 3. Health Check
   app.get('/health', (req, res) => {
     res.status(200).send('OK');
   });
+
+  app.use('/api/v1/organizations', orgRoutes);
 
   // Using the named wildcard syntax '*path'
   app.all('*path', (req: Request, res: Response, next: NextFunction) => {
