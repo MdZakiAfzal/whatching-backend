@@ -15,7 +15,7 @@ export const setupOrganization = catchAsync(
     if (!name || !userId) {
       return next(new AppError('Organization name and User ID are required', 400));
     }
-
+    
     const organization = await orgService.createOrganization(
       name, 
       new mongoose.Types.ObjectId(userId)

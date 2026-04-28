@@ -49,6 +49,7 @@ export const signup = catchAsync(async (req: Request, res: Response, next: NextF
   } catch (err) {
     user.verificationToken = undefined;
     await user.save({ validateBeforeSave: false });
+    console.log(err);
     return next(new AppError('Error sending verification email. Please try again later.', 500));
   }
 });

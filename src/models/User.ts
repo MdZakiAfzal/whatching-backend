@@ -29,6 +29,7 @@ const UserSchema: Schema = new Schema(
     passwordChangedAt: Date,
     refreshToken: { type: String, select: false },
     isVerified: { type: Boolean, default: false },
+    verificationToken: String,
     passwordResetToken: String,
     passwordResetExpires: Date,
   },

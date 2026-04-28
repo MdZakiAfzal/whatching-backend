@@ -8,6 +8,7 @@ const router = express.Router();
 
 // Public routes
 router.post('/signup', validate(signupSchema), authController.signup);
+router.get('/verify/:token', authController.verifyEmail);
 router.post('/login', validate(loginSchema), authController.login);
 router.post('/refresh-token', authController.refreshToken);
 router.post('/forgot-password', validate(forgotPasswordSchema),authController.forgotPassword);
