@@ -54,6 +54,21 @@ export const signup = catchAsync(async (req: Request, res: Response, next: NextF
   }
 });
 
+export const resendVerification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const user = await User.findOne({ email: req.body.email });
+  if (!user) return next(new AppError('No user found with that email.', 404));
+  if (user.isVerified) return next(new AppError('Account is already verified.', 400));
+
+  const verificationToken = crypto.randomBytes(32).toString('hex');
+  user.verificationToken = crypto.createHash('sha256').update(verificationToken).digest('hex');
+  await user.save({ validateBeforeSave: false });
+
+  const verificationURL = `${req.protocol}://${req.get('host')}/api/v1/users/verify/${verificationToken}`;
+  await new Email(user, verificationURL).sendVerification();
+
+  res.status(200).json({ status: 'success', message: 'New link sent!' });
+});
+
 // 2. VERIFY EMAIL: Confirm the token and activate account
 export const verifyEmail = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   const hashedToken = crypto.createHash('sha256').update(req.params.token as string).digest('hex');
@@ -77,6 +92,10 @@ export const login = catchAsync(async (req: Request, res: Response, next: NextFu
 
   if (!user || !(await user.correctPassword(password, user.password))) {
     return next(new AppError('Incorrect email or password', 401));
+  }
+
+  if (!user.isVerified) {
+    return next(new AppError('Please verify your email to log in.', 401));
   }
 
   createSendToken(user, 200, res);

@@ -1,0 +1,103 @@
+import { Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
+import User from '../models/User';
+import Membership from '../models/Membership';
+import AppError from '../utils/AppError';
+import catchAsync from '../utils/catchAsync';
+import { PlanManager } from '../utils/planManager';
+import { PLANS } from '../config/planConfig';
+
+// 1. ADD AGENT (Managed Account Model)
+export const addAgent = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { name, email, password } = req.body;
+  const organization = req.org;
+
+  // A. Professional Plan Enforcement: Count ONLY agents
+  const plan = new PlanManager(organization);
+  const currentAgentCount = await Membership.countDocuments({ 
+    orgId: organization._id, 
+    role: 'agent' 
+  });
+
+  if (!plan.isUnderLimit('agents', currentAgentCount)) {
+    const allowed = PLANS[organization.planTier].maxAgents;
+    return next(new AppError(
+      `Limit reached. Your ${organization.planTier} plan allows a maximum of ${allowed} agent seats. Please upgrade to add more.`, 
+      402
+    ));
+  }
+
+  // B. Security Check: Email must be unique in Whatching
+  const existingUser = await User.findOne({ email });
+  if (existingUser) return next(new AppError('A user with this email already exists.', 400));
+
+  // C. Atomic Transaction: Create User + Membership together
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const newAgent = await User.create([{
+      name,
+      email,
+      password,
+      isVerified: true // Owners verify their own staff
+    }], { session });
+
+    await Membership.create([{
+      userId: newAgent[0]._id,
+      orgId: organization._id,
+      role: 'agent',
+      status: 'active'
+    }], { session });
+
+    await session.commitTransaction();
+    
+    res.status(201).json({
+      status: 'success',
+      data: {
+        agent: { id: newAgent[0]._id, name, email }
+      }
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+});
+
+// 2. GET TEAM (List everyone in the business)
+export const getTeam = catchAsync(async (req: any, res: Response) => {
+  const team = await Membership.find({ orgId: req.org._id })
+    .populate('userId', 'name email');
+
+  res.status(200).json({
+    status: 'success',
+    results: team.length,
+    data: { team }
+  });
+});
+
+// 3. REMOVE MEMBER (Revoke access)
+export const removeMember = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { membershipId } = req.params;
+
+  const membership = await Membership.findOne({
+    _id: membershipId,
+    orgId: req.org._id
+  });
+
+  if (!membership) return next(new AppError('Team member not found.', 404));
+  
+  // SECURITY: Protection for the owner
+  if (membership.role === 'owner') {
+    return next(new AppError('The organization owner cannot be removed.', 400));
+  }
+
+  await Membership.findByIdAndDelete(membershipId);
+
+  res.status(204).json({
+    status: 'success',
+    data: null
+  });
+});

@@ -49,3 +49,18 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
     data: { organization }
   });
 });
+
+export const getMyOrganizations = catchAsync(async (req: any, res: Response) => {
+  // Find all memberships for this user and populate the full Organization details
+  const memberships = await Membership.find({ userId: req.user._id, status: 'active' })
+    .populate('orgId');
+
+  // Extract only the organization documents
+  const organizations = memberships.map(m => m.orgId);
+
+  res.status(200).json({
+    status: 'success',
+    results: organizations.length,
+    data: { organizations }
+  });
+});
