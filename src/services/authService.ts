@@ -21,11 +21,5 @@ export const registerUser = async (userData: any) => {
     password: userData.password,
   });
 
-  // 2. Create Default Workspace (Organization)
-  const organization = await orgService.createOrganization(
-    `${user.name}'s Workspace`,
-    user._id
-  );
-
-  return { user, organization };
+  return { user };
 };

@@ -1,30 +1,21 @@
-import Organization, { IOrganization } from '../models/Organization';
+import Organization from '../models/Organization';
 import Membership from '../models/Membership';
-import AppError from '../utils/AppError';
 import mongoose from 'mongoose';
 
-export const createOrganization = async (
-  name: string,
-  userId: mongoose.Types.ObjectId
-) => {
-  // 1. Generate a simple slug (e.g., "Zaki's Gym" -> "zakis-gym")
-  const slug = name.toLowerCase().replace(/ /g, '-').replace(/[^\w-]+/g, '');
+export const createOrganization = async (name: string, userId: mongoose.Types.ObjectId) => {
+  // 1. Generate a unique slug (Name + 4 random characters)
+  const randomSuffix = Math.random().toString(36).substring(2, 6);
+  const slug = `${name.toLowerCase().replace(/ /g, '-').replace(/[^\w-]+/g, '')}-${randomSuffix}`;
 
-  // 2. Check if slug is already taken
-  const existingOrg = await Organization.findOne({ slug });
-  if (existingOrg) {
-    throw new AppError('An organization with this name already exists. Please try a different name.', 400);
-  }
-
-  // 3. Create the Organization
+  // 2. Create the "Shell" Organization
   const newOrg = await Organization.create({
     name,
     slug,
-    planTier: 'basic', // Default plan as per your pricing
-    subscriptionStatus: 'trialing',
+    planTier: 'none',
+    subscriptionStatus: 'pending_payment',
   });
 
-  // 4. Create the Membership (The creator is the Owner)
+  // 3. Automatically make the creator the OWNER
   await Membership.create({
     userId,
     orgId: newOrg._id,

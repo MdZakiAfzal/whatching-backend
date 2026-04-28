@@ -3,8 +3,8 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IOrganization extends Document {
   name: string;
   slug: string;
-  planTier: 'basic' | 'pro' | 'enterprise';
-  subscriptionStatus: 'active' | 'past_due' | 'trialing' | 'canceled';
+  planTier: 'none' | 'basic' | 'pro' | 'enterprise';
+  subscriptionStatus: 'pending_payment' | 'active' | 'past_due' | 'trialing' | 'canceled';
   metaConfig: {
     wabaId?: string;
     phoneNumberId?: string;
@@ -23,13 +23,13 @@ const OrganizationSchema: Schema = new Schema(
     slug: { type: String, required: true, unique: true, lowercase: true },
     planTier: { 
       type: String, 
-      enum: ['basic', 'pro', 'enterprise'], 
-      default: 'basic' 
+      enum: ['none', 'basic', 'pro', 'enterprise'], 
+      default: 'none' 
     },
     subscriptionStatus: { 
       type: String, 
-      enum: ['active', 'past_due', 'trialing', 'canceled'], 
-      default: 'trialing' 
+      enum: ['pending_payment', 'active', 'past_due', 'trialing', 'canceled'], 
+      default: 'pending_payment' 
     },
     metaConfig: {
       wabaId: { type: String, sparse: true },
