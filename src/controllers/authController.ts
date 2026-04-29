@@ -10,8 +10,8 @@ import { config } from '../config';
 import Email from '../utils/Email';
 
 const createSendToken = async (user: any, statusCode: number, res: Response) => {
-  const accessToken = authService.signToken(user._id, config.jwtSecret, '1m');
-  const refreshToken = authService.signToken(user._id, config.jwtSecret, '2m');
+  const accessToken = authService.signToken(user._id, config.jwtSecret, '15m');
+  const refreshToken = authService.signToken(user._id, config.jwtSecret, '7d');
 
   // ROTATION: Save the new refresh token to the database
   user.refreshToken = refreshToken;
@@ -25,6 +25,7 @@ const createSendToken = async (user: any, statusCode: number, res: Response) => 
   });
 
   user.password = undefined;
+  user.refreshToken = undefined;
   res.status(statusCode).json({
     status: 'success',
     token: accessToken,

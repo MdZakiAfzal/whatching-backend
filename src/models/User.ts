@@ -29,6 +29,7 @@ const UserSchema: Schema = new Schema(
     phoneNumber: { // FIX: Added and made required
       type: String, 
       required: [true, 'Please provide a phone number'], 
+      unique: true, 
       trim: true 
     },
     password: { type: String, required: true, select: false },
