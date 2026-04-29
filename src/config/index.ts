@@ -10,6 +10,11 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32),
   META_APP_ID: z.string(),
   META_APP_SECRET: z.string(),
+  RAZORPAY_KEY_ID: z.string(),
+  RAZORPAY_KEY_SECRET: z.string(),
+  RAZORPAY_WEBHOOK_SECRET: z.string(),
+  RAZORPAY_BASIC_PLAN_ID: z.string(),
+  RAZORPAY_PRO_PLAN_ID: z.string(),
 });
 
 const envVars = envSchema.safeParse(process.env);
@@ -32,5 +37,14 @@ export const config = {
   meta: {
     appId: envVars.data.META_APP_ID,
     appSecret: envVars.data.META_APP_SECRET,
+  },
+  razorpay: {
+    keyId: envVars.data.RAZORPAY_KEY_ID,
+    keySecret: envVars.data.RAZORPAY_KEY_SECRET,
+    webhookSecret: envVars.data.RAZORPAY_WEBHOOK_SECRET,
+    plans: {
+      basic: envVars.data.RAZORPAY_BASIC_PLAN_ID,
+      pro: envVars.data.RAZORPAY_PRO_PLAN_ID,
+    }
   },
 };

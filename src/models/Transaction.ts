@@ -19,7 +19,7 @@ const TransactionSchema: Schema = new Schema({
   },
   status: { type: String, enum: ['pending', 'success', 'failed'], default: 'success' },
   description: { type: String, required: true },
-  referenceId: { type: String }
+  referenceId: { type: String, unique: true, sparse: true }
 }, { timestamps: true });
 
 TransactionSchema.index({ orgId: 1, createdAt: -1 });

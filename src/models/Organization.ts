@@ -15,6 +15,8 @@ export interface IOrganization extends Document {
     aiTokensUsed: number;
     subscribersCount: number;
   };
+  razorpaySubscriptionId?: string; 
+  razorpayCustomerId?: string;
 }
 
 const OrganizationSchema: Schema = new Schema(
@@ -41,6 +43,8 @@ const OrganizationSchema: Schema = new Schema(
       aiTokensUsed: { type: Number, default: 0 },
       subscribersCount: { type: Number, default: 0 },
     },
+    razorpaySubscriptionId: { type: String, sparse: true },
+    razorpayCustomerId: { type: String, sparse: true },
   },
   { timestamps: true }
 );
