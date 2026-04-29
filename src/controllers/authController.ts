@@ -9,9 +9,13 @@ import AppError from '../utils/AppError';
 import { config } from '../config';
 import Email from '../utils/Email';
 
-const createSendToken = (user: any, statusCode: number, res: Response) => {
-  const accessToken = authService.signToken(user._id, config.jwtSecret, '15m');
-  const refreshToken = authService.signToken(user._id, config.jwtSecret, '7d');
+const createSendToken = async (user: any, statusCode: number, res: Response) => {
+  const accessToken = authService.signToken(user._id, config.jwtSecret, '1m');
+  const refreshToken = authService.signToken(user._id, config.jwtSecret, '2m');
+
+  // ROTATION: Save the new refresh token to the database
+  user.refreshToken = refreshToken;
+  await user.save({ validateBeforeSave: false });
 
   res.cookie('refreshToken', refreshToken, {
     expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
@@ -21,7 +25,6 @@ const createSendToken = (user: any, statusCode: number, res: Response) => {
   });
 
   user.password = undefined;
-
   res.status(statusCode).json({
     status: 'success',
     token: accessToken,
@@ -111,25 +114,24 @@ export const logout = (req: Request, res: Response) => {
 
 export const refreshToken = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   const token = req.cookies.refreshToken;
+  if (!token) return next(new AppError('No refresh token found. Please login again.', 401));
 
-  if (!token) {
-    return next(new AppError('No refresh token found. Please log in again.', 401));
-  }
-
-  // Use promisify to avoid callback hell
   const decoded: any = await (promisify(jwt.verify) as any)(token, config.jwtSecret);
 
-  const currentUser = await User.findById(decoded.id);
-  if (!currentUser) {
-    return next(new AppError('User no longer exists.', 401));
+  // Verification: Ensure the token in the cookie matches the one in our DB
+  const currentUser = await User.findById(decoded.id).select('+refreshToken');
+  
+  if (!currentUser || currentUser.refreshToken !== token) {
+    // If it doesn't match, revoke the token to prevent reuse attacks
+    if (currentUser) {
+      currentUser.refreshToken = undefined;
+      await currentUser.save({ validateBeforeSave: false });
+    }
+    return next(new AppError('Invalid refresh token. Please log in again.', 401));
   }
 
-  const accessToken = authService.signToken(currentUser._id.toString(), config.jwtSecret, '15m');
-
-  res.status(200).json({
-    status: 'success',
-    token: accessToken
-  });
+  // Issue a brand new pair of tokens
+  await createSendToken(currentUser, 200, res);
 });
 
 export const forgotPassword = catchAsync(async (req: Request, res: Response, next: NextFunction) => {

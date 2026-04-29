@@ -9,10 +9,10 @@ import { PLANS } from '../config/planConfig';
 
 // 1. ADD AGENT (Managed Account Model)
 export const addAgent = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const { name, email, password } = req.body;
+  const { name, email, password, phoneNumber } = req.body;
   const organization = req.org;
 
-  // A. Professional Plan Enforcement: Count ONLY agents
+  // 1. Plan Enforcement: Count ONLY agents in this organization
   const plan = new PlanManager(organization);
   const currentAgentCount = await Membership.countDocuments({ 
     orgId: organization._id, 
@@ -22,16 +22,40 @@ export const addAgent = catchAsync(async (req: any, res: Response, next: NextFun
   if (!plan.isUnderLimit('agents', currentAgentCount)) {
     const allowed = PLANS[organization.planTier].maxAgents;
     return next(new AppError(
-      `Limit reached. Your ${organization.planTier} plan allows a maximum of ${allowed} agent seats. Please upgrade to add more.`, 
+      `Limit reached. Your ${organization.planTier} plan allows a maximum of ${allowed} agent seats.`, 
       402
     ));
   }
 
-  // B. Security Check: Email must be unique in Whatching
+  // 2. CHECK: Does this user already have an account in Whatching?
   const existingUser = await User.findOne({ email });
-  if (existingUser) return next(new AppError('A user with this email already exists.', 400));
 
-  // C. Atomic Transaction: Create User + Membership together
+  if (existingUser) {
+    // Check if they are already part of THIS specific organization
+    const alreadyMember = await Membership.findOne({
+      userId: existingUser._id,
+      orgId: organization._id
+    });
+
+    if (alreadyMember) {
+      return next(new AppError('This user is already a member of your team.', 400));
+    }
+
+    // SUCCESS SCENARIO A: Link existing user to this organization
+    await Membership.create({
+      userId: existingUser._id,
+      orgId: organization._id,
+      role: 'agent',
+      status: 'active'
+    });
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Existing user added to your organization as an agent.'
+    });
+  }
+
+  // 3. SUCCESS SCENARIO B: Create brand new User + Membership (Atomic Transaction)
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -40,6 +64,7 @@ export const addAgent = catchAsync(async (req: any, res: Response, next: NextFun
       name,
       email,
       password,
+      phoneNumber, // Required by your updated User model
       isVerified: true // Owners verify their own staff
     }], { session });
 

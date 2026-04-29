@@ -18,10 +18,11 @@ export class PlanManager {
   /**
    * Professional check for numerical limits (Subscribers or Agent Seats)
    */
-  isUnderLimit(type: 'subscribers' | 'agents', currentCount: number): boolean {
+  isUnderLimit(type: 'subscribers' | 'agents' | 'aiTokens', currentCount: number): boolean {
     const limitMap = {
       subscribers: this.config.maxSubscribers,
-      agents: this.config.maxAgents, // References the seats excluding owner
+      agents: this.config.maxAgents,
+      aiTokens: this.config.maxAiTokens, // FIX: Added AI Token limit support
     };
     
     return currentCount < limitMap[type];
