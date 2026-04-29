@@ -19,7 +19,7 @@ router.get('/my-organizations', orgController.getMyOrganizations);
 
 // Contextual Org Routes (Requires x-org-id header)
 router.use(setOrgContext);
-
+router.get('/', orgController.getOrganization);
 router.patch('/connect-meta', restrictTo('owner'), orgController.connectMeta);
 
 // Agent Management

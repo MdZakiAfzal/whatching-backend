@@ -21,8 +21,8 @@ export const setupOrganization = catchAsync(async (req: any, res: Response) => {
 
 // STAGE 2: Link Meta credentials after Embedded Signup
 export const connectMeta = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const { orgId, wabaId, phoneNumberId, accessToken } = req.body;
-
+  const { wabaId, phoneNumberId, accessToken } = req.body;
+  const orgId = req.org._id;
   // Security: Ensure only the OWNER can connect Meta
   const membership = await Membership.findOne({ 
     userId: req.user._id, 
@@ -62,5 +62,15 @@ export const getMyOrganizations = catchAsync(async (req: any, res: Response) => 
     status: 'success',
     results: organizations.length,
     data: { organizations }
+  });
+});
+
+export const getOrganization = catchAsync(async (req: any, res: Response) => {
+  // req.org is populated by the setOrgContext middleware
+  res.status(200).json({
+    status: 'success',
+    data: { 
+      organization: req.org 
+    }
   });
 });

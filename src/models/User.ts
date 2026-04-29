@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 export interface IUser extends Document {
   name: string;
   email: string;
+  phoneNumber: string;
   password: string; 
   passwordChangedAt?: Date;
   refreshToken?: string;
@@ -23,6 +24,11 @@ const UserSchema: Schema = new Schema(
       required: true, 
       unique: true, 
       lowercase: true, 
+      trim: true 
+    },
+    phoneNumber: { // FIX: Added and made required
+      type: String, 
+      required: [true, 'Please provide a phone number'], 
       trim: true 
     },
     password: { type: String, required: true, select: false },

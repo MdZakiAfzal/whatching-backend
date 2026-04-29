@@ -24,25 +24,30 @@ export const handleRazorpayWebhook = catchAsync(async (req: Request, res: Respon
     }
 
     if (event === 'subscription.charged') {
-      // FIX: Extract payment details to record the transaction
       const paymentEntity = payload.payment.entity;
       const amount = paymentEntity.amount / 100;
+      const referenceId = paymentEntity.id; // Unique ID for this specific month's charge
 
-      // Update Plan Status
-      await Organization.findByIdAndUpdate(orgId, {
-        planTier: subEntity.plan_id === config.razorpay.plans.pro ? 'pro' : 'basic',
-        subscriptionStatus: 'active'
-      });
+      // IDEMPOTENCY CHECK: Solve subscription double-billing
+      const existingTx = await Transaction.findOne({ referenceId });
+      
+      if (!existingTx) {
+        // Atomic update: Set active and flip the plan tier
+        await Organization.findByIdAndUpdate(orgId, {
+          planTier: subEntity.plan_id === config.razorpay.plans.pro ? 'pro' : 'basic',
+          subscriptionStatus: 'active'
+        });
 
-      // NEW: Populate Transactions table for subscriptions
-      await Transaction.create({
-        orgId,
-        amount,
-        type: 'subscription_payment',
-        status: 'success',
-        description: `Infrastructure Plan Renewal: ${subEntity.plan_id}`,
-        referenceId: paymentEntity.id // Use the specific payment ID for tracking
-      });
+        // Record the transaction for billing history
+        await Transaction.create({
+          orgId,
+          amount,
+          type: 'subscription_payment',
+          status: 'success',
+          description: `Infrastructure Plan Renewal: ${subEntity.plan_id}`,
+          referenceId
+        });
+      }
     }
 
     if (event === 'subscription.cancelled') {

@@ -4,6 +4,7 @@ export const signupSchema = z.object({
   body: z.object({
     name: z.string().min(2),
     email: z.string().email(),
+    phoneNumber: z.string().min(10, 'Please provide a valid phone number'),
     password: z.string().min(8),
     passwordConfirm: z.string()
   })

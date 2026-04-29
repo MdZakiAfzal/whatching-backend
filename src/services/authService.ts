@@ -18,6 +18,7 @@ export const registerUser = async (userData: any) => {
   const user = await User.create({
     name: userData.name,
     email: userData.email,
+    phoneNumber: userData.phoneNumber, // FIX: Added phone number to registration
     password: userData.password,
   });
 
