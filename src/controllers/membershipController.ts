@@ -80,7 +80,7 @@ export const addAgent = catchAsync(async (req: any, res: Response, next: NextFun
     res.status(201).json({
       status: 'success',
       data: {
-        agent: { id: newAgent[0]._id, name,phoneNumber, email }
+        agent: { id: newAgent[0]._id, name, phoneNumber, email }
       }
     });
   } catch (error) {

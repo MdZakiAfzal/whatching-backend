@@ -36,7 +36,7 @@ const OrganizationSchema: Schema = new Schema(
     metaConfig: {
       wabaId: { type: String, sparse: true },
       phoneNumberId: { type: String, sparse: true },
-      accessToken: { type: String },
+      accessToken: { type: String, select: false },
     },
     walletBalance: { type: Number, default: 0 }, // For promotional msg credits
     usage: {

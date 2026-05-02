@@ -4,6 +4,8 @@ import Organization from '../models/Organization';
 import Membership from '../models/Membership';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
+import { encrypt } from '../utils/encryption';
+import * as whatsappService from '../services/whatsappService';
 
 // STAGE 1: Create the basic business identity
 export const setupOrganization = catchAsync(async (req: any, res: Response) => {
@@ -21,8 +23,9 @@ export const setupOrganization = catchAsync(async (req: any, res: Response) => {
 
 // STAGE 2: Link Meta credentials after Embedded Signup
 export const connectMeta = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const { wabaId, phoneNumberId, accessToken } = req.body;
+  const { wabaId, phoneNumberId, code } = req.body;
   const orgId = req.org._id;
+
   // Security: Ensure only the OWNER can connect Meta
   const membership = await Membership.findOne({ 
     userId: req.user._id, 
@@ -34,12 +37,15 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
     return next(new AppError('You do not have permission to manage this business.', 403));
   }
 
+  const permanentToken = await whatsappService.exchangeCodeForToken(code);
+  const encryptedToken = encrypt(permanentToken);
+  
   const organization = await Organization.findByIdAndUpdate(
     orgId,
     {
       'metaConfig.wabaId': wabaId,
       'metaConfig.phoneNumberId': phoneNumberId,
-      'metaConfig.accessToken': accessToken,
+      'metaConfig.accessToken': encryptedToken,
     },
     { new: true, runValidators: true }
   );

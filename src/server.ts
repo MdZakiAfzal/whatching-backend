@@ -9,6 +9,7 @@ import AppError from './utils/AppError';
 import globalErrorHandler from './middlewares/errorMiddleware';
 import orgRoutes from './routes/organizationRoutes';
 import userRoutes from './routes/userRoutes';
+import whatsappRoutes from './routes/whatsappRoutes';
 
 const bootstrap = async () => {
   const app = express();
@@ -34,6 +35,7 @@ const bootstrap = async () => {
 
   app.use('/api/v1/users', userRoutes);
   app.use('/api/v1/organizations', orgRoutes);
+  app.use('/api/v1/whatsapp', whatsappRoutes);
 
   // Using the named wildcard syntax '*path'
   app.all('*path', (req: Request, res: Response, next: NextFunction) => {

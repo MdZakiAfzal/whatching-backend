@@ -10,6 +10,8 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32),
   META_APP_ID: z.string(),
   META_APP_SECRET: z.string(),
+  META_VERIFY_TOKEN: z.string().min(16),
+  ENCRYPTION_KEY: z.string().length(32, 'Encryption key must be exactly 32 characters'),
   RAZORPAY_KEY_ID: z.string(),
   RAZORPAY_KEY_SECRET: z.string(),
   RAZORPAY_WEBHOOK_SECRET: z.string(),
@@ -37,6 +39,7 @@ export const config = {
   meta: {
     appId: envVars.data.META_APP_ID,
     appSecret: envVars.data.META_APP_SECRET,
+    verifyToken: process.env.META_VERIFY_TOKEN,
   },
   razorpay: {
     keyId: envVars.data.RAZORPAY_KEY_ID,
@@ -47,4 +50,5 @@ export const config = {
       pro: envVars.data.RAZORPAY_PRO_PLAN_ID,
     }
   },
+  encryptionKey: envVars.data.ENCRYPTION_KEY,
 };
