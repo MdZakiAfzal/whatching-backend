@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { config } from '../config';
 
 const ALGORITHM = 'aes-256-cbc';
-const KEY = Buffer.from(process.env.ENCRYPTION_KEY || '', 'utf8');
+const KEY = Buffer.from(config.encryptionKey, 'utf8');
 const IV_LENGTH = 16; 
 
 export const encrypt = (text: string): string => {

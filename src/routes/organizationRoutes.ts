@@ -29,6 +29,7 @@ router.delete('/team/:membershipId', restrictTo('owner'), memberController.remov
 
 router.get('/billing/history', restrictTo('owner'), paymentController.getBillingHistory);
 router.post('/billing/subscribe', restrictTo('owner'), paymentController.startSubscription);
+router.post('/billing/sync', restrictTo('owner'), paymentController.syncMySubscription);
 router.post('/billing/topup-wallet', restrictTo('owner'), paymentController.topupWallet);
 router.post('/billing/cancel', restrictTo('owner'), paymentController.cancelMySubscription);
 

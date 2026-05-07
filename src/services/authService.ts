@@ -1,7 +1,6 @@
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { config } from '../config';
 import User from '../models/User';
-import * as orgService from '../services/organizationService';
 
 // Helper to sign tokens
 export const signToken = (id: string, secret: string, expires: string) => {

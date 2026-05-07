@@ -12,6 +12,7 @@ export interface IUser extends Document {
   verificationToken?: string;
   isVerified: boolean;
   correctPassword(candidatePassword: string, userPassword: string): Promise<boolean>;
+  createPasswordResetToken(): string;
   passwordResetToken?: string;
   passwordResetExpires?: Date;
 }
@@ -48,6 +49,10 @@ UserSchema.pre<IUser>('save', async function () {
   if (!this.isModified('password')) return;
 
   this.password = await bcrypt.hash(this.password, 12);
+
+  if (!this.isNew) {
+    this.passwordChangedAt = new Date(Date.now() - 1000);
+  }
 });
 
 UserSchema.methods.correctPassword = async function (

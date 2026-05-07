@@ -7,6 +7,25 @@ const razorpay = new Razorpay({
   key_secret: config.razorpay.keySecret,
 });
 
+export type RazorpaySubscriptionStatus =
+  | 'created'
+  | 'authenticated'
+  | 'active'
+  | 'pending'
+  | 'halted'
+  | 'cancelled'
+  | 'completed'
+  | 'expired';
+
+export interface RazorpaySubscription {
+  id: string;
+  plan_id: string;
+  status: RazorpaySubscriptionStatus;
+  short_url?: string;
+  customer_id?: string;
+  paid_count?: number;
+}
+
 export const createSubscription = async (orgId: string, tier: 'basic' | 'pro') => {
   const planId = tier === 'basic' ? config.razorpay.plans.basic : config.razorpay.plans.pro;
   return await razorpay.subscriptions.create({
@@ -33,15 +52,31 @@ export const cancelSubscription = async (subscriptionId: string) => {
   return await razorpay.subscriptions.cancel(subscriptionId, true);
 };
 
+export const fetchSubscription = async (subscriptionId: string): Promise<RazorpaySubscription> => {
+  return await razorpay.subscriptions.fetch(subscriptionId) as RazorpaySubscription;
+};
+
 export const verifyWebhookSignature = (rawBody: string, signature: string) => {
   const expected = crypto
     .createHmac('sha256', config.razorpay.webhookSecret)
     .update(rawBody)
     .digest('hex');
-  return expected === signature;
+
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  const signatureBuffer = Buffer.from(signature, 'utf8');
+
+  if (expectedBuffer.length !== signatureBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
 };
 
-export const createWalletLink = async (orgId: string, amount: number) => {
+export const createWalletLink = async (
+  orgId: string,
+  amount: number,
+  customer: { name: string; email: string; phoneNumber?: string }
+) => {
   // We use the Payment Link API instead of the Order API to get a URL
   return await razorpay.paymentLink.create({
     amount: amount * 100,
@@ -49,8 +84,9 @@ export const createWalletLink = async (orgId: string, amount: number) => {
     accept_partial: false,
     description: `Wallet Top-up for Whatching`,
     customer: {
-      name: "Business Owner", // You can pull this from req.user later
-      email: "owner@example.com",
+      name: customer.name,
+      email: customer.email,
+      contact: customer.phoneNumber,
     },
     notify: {
       sms: true,

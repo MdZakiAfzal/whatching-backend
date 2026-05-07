@@ -6,6 +6,8 @@ dotenv.config();
 const envSchema = z.object({
   PORT: z.string().default('5000'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  EMAIL_DELIVERY_MODE: z.enum(['smtp', 'log']).default('smtp'),
+  REDIS_URL: z.string().min(1).default('redis://127.0.0.1:6379'),
   MONGODB_URI: z.string().url(),
   JWT_SECRET: z.string().min(32),
   META_APP_ID: z.string(),
@@ -29,9 +31,11 @@ if (!envVars.success) {
 export const config = {
   port: parseInt(envVars.data.PORT, 10),
   env: envVars.data.NODE_ENV,
+  emailDeliveryMode: envVars.data.EMAIL_DELIVERY_MODE,
+  redisUrl: envVars.data.REDIS_URL,
   mongoUri: envVars.data.MONGODB_URI,
   emailHost: process.env.EMAIL_HOST,
-  emailPort: Number(process.env.EMAIL_PORT),
+  emailPort: process.env.EMAIL_PORT ? Number(process.env.EMAIL_PORT) : undefined,
   emailUser: process.env.EMAIL_USER,
   emailPassword: process.env.EMAIL_PASSWORD,
   emailFrom: process.env.EMAIL_FROM,
@@ -39,7 +43,7 @@ export const config = {
   meta: {
     appId: envVars.data.META_APP_ID,
     appSecret: envVars.data.META_APP_SECRET,
-    verifyToken: process.env.META_VERIFY_TOKEN,
+    verifyToken: envVars.data.META_VERIFY_TOKEN,
   },
   razorpay: {
     keyId: envVars.data.RAZORPAY_KEY_ID,

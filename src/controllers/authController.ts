@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction, CookieOptions } from 'express';
 import jwt from 'jsonwebtoken'; 
 import crypto from 'crypto'; 
 import { promisify } from 'util'; 
@@ -9,19 +9,28 @@ import AppError from '../utils/AppError';
 import { config } from '../config';
 import Email from '../utils/Email';
 
+const dispatchEmail = (label: string, task: Promise<void>) => {
+  void task.catch((error) => {
+    console.error(`${label} failed`, error);
+  });
+};
+
 const createSendToken = async (user: any, statusCode: number, res: Response) => {
   const accessToken = authService.signToken(user._id, config.jwtSecret, '15m');
   const refreshToken = authService.signToken(user._id, config.jwtSecret, '7d');
+  const refreshCookieOptions: CookieOptions = {
+    httpOnly: true,
+    secure: config.env === 'production',
+    sameSite: 'lax',
+  };
 
   // ROTATION: Save the new refresh token to the database
   user.refreshToken = refreshToken;
   await user.save({ validateBeforeSave: false });
 
   res.cookie('refreshToken', refreshToken, {
+    ...refreshCookieOptions,
     expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    httpOnly: true,
-    secure: config.env === 'production',
-    sameSite: 'lax',
   });
 
   user.password = undefined;
@@ -43,19 +52,13 @@ export const signup = catchAsync(async (req: Request, res: Response, next: NextF
 
   // In production, this URL points to your frontend (e.g., app.whatching.com/verify)
   const verificationURL = `${req.protocol}://${req.get('host')}/api/v1/users/verify/${verificationToken}`;
-  
-  try {
-    await new Email(user, verificationURL).sendVerification();
-    res.status(201).json({
-      status: 'success',
-      message: 'Verification link sent to email!'
-    });
-  } catch (err) {
-    user.verificationToken = undefined;
-    await user.save({ validateBeforeSave: false });
-    console.log(err);
-    return next(new AppError('Error sending verification email. Please try again later.', 500));
-  }
+
+  res.status(201).json({
+    status: 'success',
+    message: 'Account created. Verification email is being sent.'
+  });
+
+  dispatchEmail('Signup verification email', new Email(user, verificationURL).sendVerification());
 });
 
 export const resendVerification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -68,9 +71,10 @@ export const resendVerification = catchAsync(async (req: Request, res: Response,
   await user.save({ validateBeforeSave: false });
 
   const verificationURL = `${req.protocol}://${req.get('host')}/api/v1/users/verify/${verificationToken}`;
-  await new Email(user, verificationURL).sendVerification();
 
-  res.status(200).json({ status: 'success', message: 'New link sent!' });
+  res.status(200).json({ status: 'success', message: 'Verification email is being sent.' });
+
+  dispatchEmail('Resend verification email', new Email(user, verificationURL).sendVerification());
 });
 
 // 2. VERIFY EMAIL: Confirm the token and activate account
@@ -87,7 +91,7 @@ export const verifyEmail = catchAsync(async (req: Request, res: Response, next: 
   await user.save({ validateBeforeSave: false });
 
   // Log them in immediately after verification
-  createSendToken(user, 200, res);
+  await createSendToken(user, 200, res);
 });
 
 export const login = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -102,16 +106,37 @@ export const login = catchAsync(async (req: Request, res: Response, next: NextFu
     return next(new AppError('Please verify your email to log in.', 401));
   }
 
-  createSendToken(user, 200, res);
+  await createSendToken(user, 200, res);
 });
 
-export const logout = (req: Request, res: Response) => {
-  res.cookie('refreshToken', 'loggedout', {
-    expires: new Date(Date.now() + 10 * 1000),
+export const logout = catchAsync(async (req: Request, res: Response) => {
+  const token = req.cookies.refreshToken;
+  const refreshCookieOptions: CookieOptions = {
     httpOnly: true,
+    secure: config.env === 'production',
+    sameSite: 'lax',
+  };
+
+  if (token) {
+    try {
+      const decoded: any = await (promisify(jwt.verify) as any)(token, config.jwtSecret);
+      const currentUser = await User.findById(decoded.id).select('+refreshToken');
+
+      if (currentUser && currentUser.refreshToken === token) {
+        currentUser.refreshToken = undefined;
+        await currentUser.save({ validateBeforeSave: false });
+      }
+    } catch {
+      // Expired or invalid cookies can still be cleared client-side.
+    }
+  }
+
+  res.cookie('refreshToken', '', {
+    ...refreshCookieOptions,
+    expires: new Date(0),
   });
   res.status(200).json({ status: 'success' });
-};
+});
 
 export const refreshToken = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   const token = req.cookies.refreshToken;
@@ -139,20 +164,13 @@ export const forgotPassword = catchAsync(async (req: Request, res: Response, nex
   const user = await User.findOne({ email: req.body.email });
   if (!user) return next(new AppError('No user found with that email.', 404));
 
-  const resetToken = (user as any).createPasswordResetToken();
+  const resetToken = user.createPasswordResetToken();
   await user.save({ validateBeforeSave: false });
 
   const resetURL = `${req.protocol}://${req.get('host')}/api/v1/users/reset-password/${resetToken}`;
+  res.status(200).json({ status: 'success', message: 'Password reset email is being sent.' });
 
-  try {
-    await new Email(user, resetURL).sendPasswordReset();
-    res.status(200).json({ status: 'success', message: 'Token sent to email!' });
-  } catch (err) {
-    user.passwordResetToken = undefined;
-    user.passwordResetExpires = undefined;
-    await user.save({ validateBeforeSave: false });
-    return next(new AppError('Error sending reset email.', 500));
-  }
+  dispatchEmail('Password reset email', new Email(user, resetURL).sendPasswordReset());
 });
 
 export const resetPassword = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -175,7 +193,7 @@ export const resetPassword = catchAsync(async (req: Request, res: Response, next
   user.passwordResetExpires = undefined;
   
   await user.save();
-  createSendToken(user, 200, res);
+  await createSendToken(user, 200, res);
 });
 
 export const getMe = (req: any, res: Response) => {

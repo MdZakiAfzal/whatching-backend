@@ -1,4 +1,10 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: whatching-redis
+    ports:
+      - "6379:6379"
+
   whatching-backend:
     build: .
     container_name: watching-backend
@@ -6,6 +12,24 @@ services:
       - "5001:5001"
     env_file:
       - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+
+  whatching-worker:
+    build: .
+    container_name: whatching-worker
+    command: npm run dev:worker
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
     volumes:
       - .:/usr/src/app
       - /usr/src/app/node_modules

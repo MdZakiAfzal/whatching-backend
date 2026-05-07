@@ -5,8 +5,10 @@
   "main": "index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev:worker": "ts-node-dev --respawn --transpile-only src/worker.ts",
     "build": "rimraf dist && tsc",
     "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
     "lint": "tsc --noEmit"
   },
   "keywords": [],
@@ -15,13 +17,16 @@
   "type": "commonjs",
   "dependencies": {
     "@types/morgan": "^1.9.10",
+    "axios": "^1.15.2",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.76.6",
     "cookie-parse": "^0.4.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "helmet": "^8.1.0",
+    "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.5.0",
     "morgan": "^1.10.1",

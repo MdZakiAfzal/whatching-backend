@@ -2,6 +2,56 @@ import { Request, Response } from 'express';
 import { config } from '../config';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
+import crypto from 'crypto';
+import Organization from '../models/Organization';
+import WebhookEvent from '../models/WebhookEvent';
+import { enqueueWhatsAppWebhookJob } from '../queues/whatsappWebhookQueue';
+import * as whatsappService from '../services/whatsappService';
+
+type RawBodyRequest = Request & { rawBody?: string };
+
+const extractEventType = (body: any) => {
+  const fields = new Set<string>();
+
+  for (const entry of body.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      if (typeof change.field === 'string') {
+        fields.add(change.field);
+      }
+    }
+  }
+
+  return fields.size > 0 ? [...fields].join(',') : 'unknown';
+};
+
+const extractPhoneNumberId = (body: any) => {
+  for (const entry of body.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      const phoneNumberId = change?.value?.metadata?.phone_number_id;
+      if (typeof phoneNumberId === 'string' && phoneNumberId.length > 0) {
+        return phoneNumberId;
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const resolveOrgIdFromWebhook = async (body: any) => {
+  const phoneNumberId = extractPhoneNumberId(body);
+  if (!phoneNumberId) {
+    return undefined;
+  }
+
+  const organization = await Organization.findOne({
+    'metaConfig.phoneNumberId': phoneNumberId,
+  }).select('_id');
+
+  return organization ? String(organization._id) : undefined;
+};
+
+const computeWebhookEventId = (rawBody: string) =>
+  crypto.createHash('sha256').update(rawBody).digest('hex');
 
 /**
  * META WEBHOOK VERIFICATION (GET)
@@ -34,16 +84,55 @@ export const verifyWebhook = (req: Request, res: Response) => {
  */
 export const handleWebhook = catchAsync(async (req: Request, res: Response) => {
   const body = req.body;
+  const rawBody = (req as RawBodyRequest).rawBody ?? JSON.stringify(body);
+  const signatureHeader = req.headers['x-hub-signature-256'];
+  const signatureVerified = whatsappService.verifyMetaWebhookSignature(
+    rawBody,
+    typeof signatureHeader === 'string' ? signatureHeader : undefined
+  );
+
+  if (config.env === 'production' && !signatureVerified) {
+    return res.sendStatus(401);
+  }
 
   // IMPORTANT: WhatsApp webhooks have a specific nested structure
   // We check if it's a valid WhatsApp message notification
   if (body.object === 'whatsapp_business_account') {
-    
-    // Logic for processing goes here (Phase 4)
-    // For now, return 200 immediately to Meta to avoid retries
+    const eventId = computeWebhookEventId(rawBody);
+
+    let webhookEvent;
+    let shouldEnqueue = false;
+
+    try {
+      webhookEvent = await WebhookEvent.create({
+        orgId: await resolveOrgIdFromWebhook(body),
+        provider: 'whatsapp',
+        eventType: extractEventType(body),
+        eventId,
+        signatureVerified,
+        payload: body,
+        processingStatus: 'pending',
+      });
+      shouldEnqueue = true;
+    } catch (error: any) {
+      if (error?.code === 11000) {
+        webhookEvent = await WebhookEvent.findOne({
+          provider: 'whatsapp',
+          eventId,
+        });
+      } else {
+        throw error;
+      }
+    }
+
+    if (webhookEvent && shouldEnqueue) {
+      await enqueueWhatsAppWebhookJob({
+        webhookEventId: String(webhookEvent._id),
+        orgId: webhookEvent.orgId ? String(webhookEvent.orgId) : undefined,
+      });
+    }
+
     res.status(200).send('EVENT_RECEIVED');
-    
-    // TODO: Push to Redis queue for background worker processing
     return;
   }
 

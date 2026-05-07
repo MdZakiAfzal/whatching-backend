@@ -1,44 +1,66 @@
-/*import nodemailer from 'nodemailer';
+import nodemailer from 'nodemailer';
 import { config } from '../config';
 
 export default class Email {
   to: string;
-  firstName: string;
   url: string;
+  firstName: string;
   from: string;
 
   constructor(user: any, url: string) {
     this.to = user.email;
-    this.firstName = user.name.split(' ')[0];
     this.url = url;
+    this.firstName = user.name.split(' ')[0];
     this.from = `Whatching <${config.emailFrom}>`;
   }
 
-  newTransport() {
-    // Titan Mail works best with SSL on port 465
+  private newTransport() {
+    if (
+      !config.emailHost ||
+      !config.emailPort ||
+      Number.isNaN(config.emailPort) ||
+      !config.emailUser ||
+      !config.emailPassword ||
+      !config.emailFrom
+    ) {
+      throw new Error('SMTP is not configured.');
+    }
+
     return nodemailer.createTransport({
       host: config.emailHost,
       port: config.emailPort,
-      secure: true, // true for 465, false for other ports
+      secure: config.emailPort === 465,
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
       auth: {
         user: config.emailUser,
         pass: config.emailPassword,
       },
-      authMethod: 'LOGIN',
-      debug: true, 
-      logger: true
     });
   }
 
-  async send(subject: string, text: string) {
-    const mailOptions = {
+  private logEmail(subject: string, text: string) {
+    console.log('\n--- AUTH EMAIL LOG MODE ---');
+    console.log(`TO: ${this.to}`);
+    console.log(`SUBJECT: ${subject}`);
+    console.log(`LINK: ${this.url}`);
+    console.log(text);
+    console.log('---------------------------\n');
+  }
+
+  private async send(subject: string, text: string) {
+    if (config.emailDeliveryMode === 'log') {
+      this.logEmail(subject, text);
+      return;
+    }
+
+    await this.newTransport().sendMail({
       from: this.from,
       to: this.to,
       subject,
       text,
-    };
-
-    await this.newTransport().sendMail(mailOptions);
+    });
   }
 
   async sendVerification() {
@@ -53,32 +75,5 @@ export default class Email {
       'Your password reset token (valid for 10 min)',
       `Hi ${this.firstName},\n\nForgot your password? Click the link below to reset it:\n${this.url}\n\nIf you didn't request this, please ignore this email.`
     );
-  }
-}*/
-
-export default class Email {
-  to: string;
-  url: string;
-
-  constructor(user: any, url: string) {
-    this.to = user.email;
-    this.url = url;
-  }
-
-  // We keep the method names the same so the Controller doesn't break
-  async sendVerification() {
-    console.log('\n--- 📧 DUMMY EMAIL SERVICE ---');
-    console.log(`TO: ${this.to}`);
-    console.log('SUBJECT: Verify your Whatching Account');
-    console.log(`VERIFICATION LINK: ${this.url}`);
-    console.log('-------------------------------\n');
-  }
-
-  async sendPasswordReset() {
-    console.log('\n--- 📧 DUMMY EMAIL SERVICE ---');
-    console.log(`TO: ${this.to}`);
-    console.log('SUBJECT: Password Reset Token');
-    console.log(`RESET LINK: ${this.url}`);
-    console.log('-------------------------------\n');
   }
 }
