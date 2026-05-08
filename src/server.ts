@@ -16,7 +16,10 @@ const bootstrap = async () => {
 
   // 1. Security Middlewares
   app.use(helmet());
-  app.use(cors());
+  app.use(cors({
+    origin: config.frontendUrl,
+    credentials: true, 
+  }));
   app.use(express.json({
     verify: (req, _res, buf) => {
       (req as Request & { rawBody?: string }).rawBody = buf.toString('utf8');

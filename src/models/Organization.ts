@@ -9,6 +9,12 @@ export interface IOrganization extends Document {
     wabaId?: string;
     phoneNumberId?: string;
     accessToken?: string;
+    status?: 'pending' | 'ready' | 'disconnected';
+    connectedAt?: Date;
+    webhookVerifiedAt?: Date;
+    lastTemplateSyncAt?: Date;
+    businessAccountName?: string;
+    displayPhoneNumber?: string;
   };
   walletBalance: number;
   usage: {
@@ -37,6 +43,12 @@ const OrganizationSchema: Schema = new Schema(
       wabaId: { type: String, sparse: true },
       phoneNumberId: { type: String, sparse: true },
       accessToken: { type: String, select: false },
+      status: { type: String, enum: ['pending', 'ready', 'disconnected'], default: 'pending' },
+      connectedAt: Date,
+      webhookVerifiedAt: Date,
+      lastTemplateSyncAt: Date,
+      businessAccountName: String,
+      displayPhoneNumber: String,
     },
     walletBalance: { type: Number, default: 0 }, // For promotional msg credits
     usage: {

@@ -21,6 +21,7 @@ router.get('/my-organizations', orgController.getMyOrganizations);
 router.use(setOrgContext);
 router.get('/', orgController.getOrganization);
 router.patch('/connect-meta', restrictTo('owner'), orgController.connectMeta);
+router.get('/integration-status', restrictTo('owner', 'admin'), orgController.getIntegrationStatus);
 
 // Agent Management
 router.get('/team', memberController.getTeam);

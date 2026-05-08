@@ -6,6 +6,7 @@ dotenv.config();
 const envSchema = z.object({
   PORT: z.string().default('5000'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  FRONTEND_URL: z.string().url().default('http://localhost:3000'),
   EMAIL_DELIVERY_MODE: z.enum(['smtp', 'log']).default('smtp'),
   REDIS_URL: z.string().min(1).default('redis://127.0.0.1:6379'),
   MONGODB_URI: z.string().url(),
@@ -31,6 +32,7 @@ if (!envVars.success) {
 export const config = {
   port: parseInt(envVars.data.PORT, 10),
   env: envVars.data.NODE_ENV,
+  frontendUrl: envVars.data.FRONTEND_URL,
   emailDeliveryMode: envVars.data.EMAIL_DELIVERY_MODE,
   redisUrl: envVars.data.REDIS_URL,
   mongoUri: envVars.data.MONGODB_URI,

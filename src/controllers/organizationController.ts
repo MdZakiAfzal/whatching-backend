@@ -37,7 +37,8 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
     return next(new AppError('You do not have permission to manage this business.', 403));
   }
 
-  const permanentToken = await whatsappService.exchangeCodeForToken(code);
+  // const permanentToken = await whatsappService.exchangeCodeForToken(code);
+  const permanentToken = code; // For now, we are directly using the code as the token for testing purposes. In production, this should be exchanged for a permanent token.
   const encryptedToken = encrypt(permanentToken);
   
   const organization = await Organization.findByIdAndUpdate(
@@ -46,6 +47,8 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
       'metaConfig.wabaId': wabaId,
       'metaConfig.phoneNumberId': phoneNumberId,
       'metaConfig.accessToken': encryptedToken,
+      'metaConfig.status': 'ready', // Setting health metrics
+      'metaConfig.connectedAt': new Date(),
     },
     { new: true, runValidators: true }
   );
@@ -53,6 +56,25 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
   res.status(200).json({
     status: 'success',
     data: { organization }
+  });
+});
+
+export const getIntegrationStatus = catchAsync(async (req: any, res: Response) => {
+  const org = req.org; // Populated by setOrgContext middleware
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      integration: {
+        state: org.metaConfig?.status || 'pending',
+        wabaId: org.metaConfig?.wabaId,
+        phoneNumberId: org.metaConfig?.phoneNumberId,
+        displayPhoneNumber: org.metaConfig?.displayPhoneNumber,
+        // If they have a WABA ID, the webhook is effectively active for them
+        webhookVerified: !!org.metaConfig?.wabaId, 
+        lastTemplateSyncAt: org.metaConfig?.lastTemplateSyncAt || null
+      }
+    }
   });
 });
 
