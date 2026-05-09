@@ -6,6 +6,11 @@ import { setOrgContext } from '../middlewares/orgMiddleware';
 import { restrictTo } from '../middlewares/roleMiddleware';
 import * as paymentController from '../controllers/paymentController';
 import * as webhookController from '../controllers/webhookController';
+import { validate } from '../middlewares/validateMiddleware';
+import {
+  connectMetaSchema,
+  setupOrganizationSchema,
+} from '../validations/organizationValidation';
 
 const router = express.Router();
 
@@ -14,14 +19,15 @@ router.post('/billing/webhook', webhookController.handleRazorpayWebhook);
 router.use(protect);
 
 // Global Org Routes
-router.post('/setup', orgController.setupOrganization);
+router.post('/setup', validate(setupOrganizationSchema), orgController.setupOrganization);
 router.get('/my-organizations', orgController.getMyOrganizations);
 
 // Contextual Org Routes (Requires x-org-id header)
 router.use(setOrgContext);
 router.get('/', orgController.getOrganization);
-router.patch('/connect-meta', restrictTo('owner'), orgController.connectMeta);
+router.patch('/connect-meta', restrictTo('owner'), validate(connectMetaSchema), orgController.connectMeta);
 router.get('/integration-status', restrictTo('owner', 'admin'), orgController.getIntegrationStatus);
+router.post('/integration/sync', restrictTo('owner', 'admin'), orgController.syncMetaIntegration);
 
 // Agent Management
 router.get('/team', memberController.getTeam);

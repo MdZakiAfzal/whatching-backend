@@ -14,6 +14,7 @@ const envSchema = z.object({
   META_APP_ID: z.string(),
   META_APP_SECRET: z.string(),
   META_VERIFY_TOKEN: z.string().min(16),
+  META_TEMPLATE_FEE: z.string().default('0.8631'), // Default fee as a string to maintain precision
   ENCRYPTION_KEY: z.string().length(32, 'Encryption key must be exactly 32 characters'),
   RAZORPAY_KEY_ID: z.string(),
   RAZORPAY_KEY_SECRET: z.string(),
@@ -46,6 +47,7 @@ export const config = {
     appId: envVars.data.META_APP_ID,
     appSecret: envVars.data.META_APP_SECRET,
     verifyToken: envVars.data.META_VERIFY_TOKEN,
+    templateFee: parseFloat(envVars.data.META_TEMPLATE_FEE), // Convert fee to a number for calculations
   },
   razorpay: {
     keyId: envVars.data.RAZORPAY_KEY_ID,

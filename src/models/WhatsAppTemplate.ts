@@ -6,10 +6,12 @@ export interface IWhatsAppTemplate extends Document {
   templateId: string; // The ID from Meta
   name: string;
   language: string;
-  category: 'AUTHENTICATION' | 'MARKETING' | 'UTILITY';
-  status: 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | 'DISABLED';
+  category: string;
+  status: string;
   components: any[]; // The raw JSON structure of the template (headers, body, buttons)
   rejectionReason?: string;
+  qualityScore?: string;
+  namespace?: string;
   lastSyncedAt: Date;
 }
 
@@ -19,18 +21,12 @@ const WhatsAppTemplateSchema: Schema = new Schema({
   templateId: { type: String, required: true },
   name: { type: String, required: true },
   language: { type: String, required: true },
-  category: { 
-    type: String, 
-    enum: ['AUTHENTICATION', 'MARKETING', 'UTILITY'],
-    required: true 
-  },
-  status: { 
-    type: String, 
-    enum: ['APPROVED', 'PENDING', 'REJECTED', 'PAUSED', 'DISABLED'],
-    required: true 
-  },
+  category: { type: String, required: true, trim: true },
+  status: { type: String, required: true, trim: true },
   components: { type: [Schema.Types.Mixed], default: [] },
   rejectionReason: String,
+  qualityScore: String,
+  namespace: String,
   lastSyncedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 

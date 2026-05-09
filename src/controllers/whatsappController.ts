@@ -126,6 +126,15 @@ export const handleWebhook = catchAsync(async (req: Request, res: Response) => {
     }
 
     if (webhookEvent && shouldEnqueue) {
+      if (webhookEvent.orgId) {
+        await Organization.findByIdAndUpdate(webhookEvent.orgId, {
+          $set: {
+            'metaConfig.webhookVerifiedAt': new Date(),
+            'metaConfig.lastHealthCheckAt': new Date(),
+          },
+        });
+      }
+
       await enqueueWhatsAppWebhookJob({
         webhookEventId: String(webhookEvent._id),
         orgId: webhookEvent.orgId ? String(webhookEvent.orgId) : undefined,

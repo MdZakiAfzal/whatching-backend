@@ -1,7 +1,17 @@
 import axios from 'axios';
-import mongoose from 'mongoose';
 import { decrypt } from '../utils/encryption';
 import WhatsAppTemplate from '../models/WhatsAppTemplate';
+import AppError from '../utils/AppError';
+
+const GRAPH_API_VERSION = 'v20.0';
+
+const buildMetaHeaders = (accessToken: string) => ({
+  Authorization: `Bearer ${decrypt(accessToken)}`,
+});
+
+const normalizeTemplateStatus = (status?: string) => status?.trim().toUpperCase() || 'PENDING';
+
+const normalizeTemplateCategory = (category?: string) => category?.trim().toUpperCase() || 'UTILITY';
 
 export const syncTemplatesFromMeta = async (org: any) => {
   const { wabaId, accessToken } = org.metaConfig;
@@ -10,31 +20,29 @@ export const syncTemplatesFromMeta = async (org: any) => {
     throw new Error('Meta integration is incomplete. Missing WABA ID or Access Token.');
   }
 
-  // 1. SECURITY: Decrypt the token to use it
-  const decryptedToken = decrypt(accessToken);
-
-  // 2. Fetch from Meta Graph API
-  const response = await axios.get(`https://graph.facebook.com/v20.0/${wabaId}/message_templates`, {
+  const response = await axios.get(`https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/message_templates`, {
     params: { limit: 100 },
-    headers: { Authorization: `Bearer ${decryptedToken}` }
+    headers: buildMetaHeaders(accessToken),
   });
 
-  const templates = response.data.data;
+  const templates = response.data.data ?? [];
 
-  // 3. SCALABILITY: Prepare bulk operations for MongoDB
   const operations = templates.map((tpl: any) => ({
     updateOne: {
       filter: { orgId: org._id, templateId: tpl.id },
       update: {
         $set: {
           wabaId: wabaId,
+          templateId: tpl.id,
           name: tpl.name,
           language: tpl.language,
-          category: tpl.category,
-          status: tpl.status, // e.g., APPROVED, REJECTED
-          components: tpl.components,
+          category: normalizeTemplateCategory(tpl.category),
+          status: normalizeTemplateStatus(tpl.status),
+          components: tpl.components ?? [],
           rejectionReason: tpl.rejected_reason,
-          lastSyncedAt: new Date()
+          qualityScore: tpl.quality_score ?? tpl.quality_rating,
+          namespace: tpl.namespace,
+          lastSyncedAt: new Date(),
         }
       },
       upsert: true
@@ -45,9 +53,89 @@ export const syncTemplatesFromMeta = async (org: any) => {
     await WhatsAppTemplate.bulkWrite(operations);
   }
 
-  // 4. Update the organization's health metrics
+  const activeTemplateIds = templates.map((tpl: any) => tpl.id).filter(Boolean);
+  await WhatsAppTemplate.updateMany(
+    {
+      orgId: org._id,
+      templateId: { $nin: activeTemplateIds },
+    },
+    {
+      $set: {
+        status: 'ARCHIVED',
+        lastSyncedAt: new Date(),
+      },
+    }
+  );
+
   org.metaConfig.lastTemplateSyncAt = new Date();
+  org.metaConfig.lastHealthCheckAt = new Date();
   await org.save({ validateBeforeSave: false });
 
   return templates.length;
+};
+
+export const createTemplateInMeta = async (
+  org: any,
+  payload: {
+    name: string;
+    language: string;
+    category: string;
+    components: Record<string, unknown>[];
+    allowCategoryChange?: boolean;
+  }
+) => {
+  const { wabaId, accessToken } = org.metaConfig;
+
+  if (!wabaId || !accessToken) {
+    throw new AppError('Meta integration is incomplete. Missing WABA ID or access token.', 400);
+  }
+
+  await axios.post(
+    `https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/message_templates`,
+    {
+      name: payload.name,
+      language: payload.language,
+      category: normalizeTemplateCategory(payload.category),
+      components: payload.components,
+      allow_category_change: payload.allowCategoryChange,
+    },
+    {
+      headers: {
+        ...buildMetaHeaders(accessToken),
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  await syncTemplatesFromMeta(org);
+
+  const template = await WhatsAppTemplate.findOne({
+    orgId: org._id,
+    name: payload.name,
+    language: payload.language,
+  }).sort('-updatedAt');
+
+  if (!template) {
+    throw new AppError('Template was created in Meta but could not be found locally after sync.', 502);
+  }
+
+  return template;
+};
+
+export const deleteTemplateInMeta = async (org: any, template: any) => {
+  const { wabaId, accessToken } = org.metaConfig;
+
+  if (!wabaId || !accessToken) {
+    throw new AppError('Meta integration is incomplete. Missing WABA ID or access token.', 400);
+  }
+
+  await axios.delete(`https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/message_templates`, {
+    headers: buildMetaHeaders(accessToken),
+    params: {
+      name: template.name,
+      hsm_id: template.templateId,
+    },
+  });
+
+  await WhatsAppTemplate.deleteOne({ _id: template._id });
 };

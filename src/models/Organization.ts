@@ -13,6 +13,7 @@ export interface IOrganization extends Document {
     connectedAt?: Date;
     webhookVerifiedAt?: Date;
     lastTemplateSyncAt?: Date;
+    lastHealthCheckAt?: Date;
     businessAccountName?: string;
     displayPhoneNumber?: string;
   };
@@ -47,6 +48,7 @@ const OrganizationSchema: Schema = new Schema(
       connectedAt: Date,
       webhookVerifiedAt: Date,
       lastTemplateSyncAt: Date,
+      lastHealthCheckAt: Date,
       businessAccountName: String,
       displayPhoneNumber: String,
     },
@@ -59,6 +61,26 @@ const OrganizationSchema: Schema = new Schema(
     razorpayCustomerId: { type: String, sparse: true },
   },
   { timestamps: true }
+);
+
+OrganizationSchema.index(
+  { 'metaConfig.phoneNumberId': 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      'metaConfig.phoneNumberId': { $exists: true, $type: 'string' },
+    },
+  }
+);
+
+OrganizationSchema.index(
+  { 'metaConfig.wabaId': 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      'metaConfig.wabaId': { $exists: true, $type: 'string' },
+    },
+  }
 );
 
 export default mongoose.model<IOrganization>('Organization', OrganizationSchema);

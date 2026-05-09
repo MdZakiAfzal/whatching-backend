@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import Membership from '../models/Membership';
 import AppError from '../utils/AppError';
 import catchAsync from '../utils/catchAsync';
+import mongoose from 'mongoose';
 
 export const setOrgContext = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   // 1. Get Org ID from header
@@ -9,6 +10,10 @@ export const setOrgContext = catchAsync(async (req: any, res: Response, next: Ne
 
   if (!orgId) {
     return next(new AppError('Please select an organization to continue.', 400));
+  }
+
+  if (typeof orgId !== 'string' || !mongoose.Types.ObjectId.isValid(orgId)) {
+    return next(new AppError('Invalid organization context supplied.', 400));
   }
 
   // 2. Check if user is a member of this organization

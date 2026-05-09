@@ -4,8 +4,33 @@ import Organization from '../models/Organization';
 import Membership from '../models/Membership';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
-import { encrypt } from '../utils/encryption';
+import { decrypt, encrypt } from '../utils/encryption';
 import * as whatsappService from '../services/whatsappService';
+import { logIntegrationAction } from '../services/integrationLogService';
+
+const getMetaAccessTokenFromBody = (body: Record<string, unknown>) => {
+  const accessToken = typeof body.accessToken === 'string' ? body.accessToken.trim() : '';
+  const legacyCode = typeof body.code === 'string' ? body.code.trim() : '';
+
+  return accessToken || legacyCode;
+};
+
+const ensureMetaAssetOwnership = async (orgId: string, wabaId: string, phoneNumberId: string) => {
+  const conflictingOrganization = await Organization.findOne({
+    _id: { $ne: orgId },
+    $or: [
+      { 'metaConfig.wabaId': wabaId },
+      { 'metaConfig.phoneNumberId': phoneNumberId },
+    ],
+  }).select('_id name metaConfig.wabaId metaConfig.phoneNumberId');
+
+  if (conflictingOrganization) {
+    throw new AppError(
+      'This WhatsApp Business Account or phone number is already connected to another organization.',
+      409
+    );
+  }
+};
 
 // STAGE 1: Create the basic business identity
 export const setupOrganization = catchAsync(async (req: any, res: Response) => {
@@ -23,10 +48,10 @@ export const setupOrganization = catchAsync(async (req: any, res: Response) => {
 
 // STAGE 2: Link Meta credentials after Embedded Signup
 export const connectMeta = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const { wabaId, phoneNumberId, code } = req.body;
+  const { wabaId, phoneNumberId } = req.body;
   const orgId = req.org._id;
+  const rawAccessToken = getMetaAccessTokenFromBody(req.body);
 
-  // Security: Ensure only the OWNER can connect Meta
   const membership = await Membership.findOne({ 
     userId: req.user._id, 
     orgId, 
@@ -37,26 +62,68 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
     return next(new AppError('You do not have permission to manage this business.', 403));
   }
 
-  // const permanentToken = await whatsappService.exchangeCodeForToken(code);
-  const permanentToken = code; // For now, we are directly using the code as the token for testing purposes. In production, this should be exchanged for a permanent token.
-  const encryptedToken = encrypt(permanentToken);
-  
-  const organization = await Organization.findByIdAndUpdate(
-    orgId,
-    {
-      'metaConfig.wabaId': wabaId,
-      'metaConfig.phoneNumberId': phoneNumberId,
-      'metaConfig.accessToken': encryptedToken,
-      'metaConfig.status': 'ready', // Setting health metrics
-      'metaConfig.connectedAt': new Date(),
-    },
-    { new: true, runValidators: true }
-  );
+  try {
+    await ensureMetaAssetOwnership(String(orgId), wabaId, phoneNumberId);
 
-  res.status(200).json({
-    status: 'success',
-    data: { organization }
-  });
+    const resolvedConnection = await whatsappService.resolveMetaConnection(
+      rawAccessToken,
+      wabaId,
+      phoneNumberId
+    );
+    const encryptedToken = encrypt(rawAccessToken);
+
+    const organization = await Organization.findByIdAndUpdate(
+      orgId,
+      {
+        'metaConfig.wabaId': resolvedConnection.wabaId,
+        'metaConfig.phoneNumberId': resolvedConnection.phoneNumberId,
+        'metaConfig.accessToken': encryptedToken,
+        'metaConfig.status': 'ready',
+        'metaConfig.connectedAt': new Date(),
+        'metaConfig.lastHealthCheckAt': new Date(),
+        'metaConfig.businessAccountName': resolvedConnection.businessAccountName,
+        'metaConfig.displayPhoneNumber': resolvedConnection.displayPhoneNumber,
+      },
+      { new: true, runValidators: true }
+    );
+
+    await logIntegrationAction({
+      orgId,
+      actorUserId: req.user._id,
+      action: 'meta_connect',
+      status: 'success',
+      details: {
+        wabaId: resolvedConnection.wabaId,
+        phoneNumberId: resolvedConnection.phoneNumberId,
+        displayPhoneNumber: resolvedConnection.displayPhoneNumber,
+      },
+      externalRef: resolvedConnection.phoneNumberId,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: { organization }
+    });
+  } catch (error: any) {
+    await logIntegrationAction({
+      orgId,
+      actorUserId: req.user._id,
+      action: 'meta_connect',
+      status: 'failed',
+      details: {
+        attemptedWabaId: wabaId,
+        attemptedPhoneNumberId: phoneNumberId,
+        reason: error.message,
+      },
+      externalRef: phoneNumberId,
+    });
+
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    throw new AppError(`Meta connection failed: ${error.message}`, 502);
+  }
 });
 
 export const getIntegrationStatus = catchAsync(async (req: any, res: Response) => {
@@ -69,13 +136,78 @@ export const getIntegrationStatus = catchAsync(async (req: any, res: Response) =
         state: org.metaConfig?.status || 'pending',
         wabaId: org.metaConfig?.wabaId,
         phoneNumberId: org.metaConfig?.phoneNumberId,
+        businessAccountName: org.metaConfig?.businessAccountName,
         displayPhoneNumber: org.metaConfig?.displayPhoneNumber,
-        // If they have a WABA ID, the webhook is effectively active for them
-        webhookVerified: !!org.metaConfig?.wabaId, 
+        connectedAt: org.metaConfig?.connectedAt || null,
+        webhookVerified: !!org.metaConfig?.webhookVerifiedAt,
+        webhookVerifiedAt: org.metaConfig?.webhookVerifiedAt || null,
+        lastHealthCheckAt: org.metaConfig?.lastHealthCheckAt || null,
         lastTemplateSyncAt: org.metaConfig?.lastTemplateSyncAt || null
       }
     }
   });
+});
+
+export const syncMetaIntegration = catchAsync(async (req: any, res: Response) => {
+  const organization = await Organization.findById(req.org._id).select('+metaConfig.accessToken');
+
+  if (!organization?.metaConfig?.wabaId || !organization.metaConfig.phoneNumberId || !organization.metaConfig.accessToken) {
+    throw new AppError('Your Meta account is not connected yet.', 400);
+  }
+
+  try {
+    const resolvedConnection = await whatsappService.resolveMetaConnection(
+      decrypt(organization.metaConfig.accessToken),
+      organization.metaConfig.wabaId,
+      organization.metaConfig.phoneNumberId
+    );
+
+    organization.metaConfig.status = 'ready';
+    organization.metaConfig.lastHealthCheckAt = new Date();
+    organization.metaConfig.businessAccountName = resolvedConnection.businessAccountName;
+    organization.metaConfig.displayPhoneNumber = resolvedConnection.displayPhoneNumber;
+    await organization.save({ validateBeforeSave: false });
+
+    await logIntegrationAction({
+      orgId: organization._id,
+      actorUserId: req.user._id,
+      action: 'meta_sync',
+      status: 'success',
+      details: {
+        wabaId: resolvedConnection.wabaId,
+        phoneNumberId: resolvedConnection.phoneNumberId,
+      },
+      externalRef: resolvedConnection.phoneNumberId,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        integration: {
+          state: organization.metaConfig.status,
+          wabaId: organization.metaConfig.wabaId,
+          phoneNumberId: organization.metaConfig.phoneNumberId,
+          businessAccountName: organization.metaConfig.businessAccountName,
+          displayPhoneNumber: organization.metaConfig.displayPhoneNumber,
+          webhookVerified: !!organization.metaConfig.webhookVerifiedAt,
+          webhookVerifiedAt: organization.metaConfig.webhookVerifiedAt || null,
+          connectedAt: organization.metaConfig.connectedAt || null,
+          lastHealthCheckAt: organization.metaConfig.lastHealthCheckAt || null,
+          lastTemplateSyncAt: organization.metaConfig.lastTemplateSyncAt || null,
+        },
+      },
+    });
+  } catch (error: any) {
+    await logIntegrationAction({
+      orgId: organization._id,
+      actorUserId: req.user._id,
+      action: 'meta_sync',
+      status: 'failed',
+      details: { reason: error.message },
+      externalRef: organization.metaConfig.phoneNumberId,
+    });
+    throw new AppError(`Meta sync failed: ${error.message}`, 502);
+  }
 });
 
 export const getMyOrganizations = catchAsync(async (req: any, res: Response) => {
