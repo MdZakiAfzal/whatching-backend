@@ -84,7 +84,7 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
         'metaConfig.businessAccountName': resolvedConnection.businessAccountName,
         'metaConfig.displayPhoneNumber': resolvedConnection.displayPhoneNumber,
       },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
 
     await logIntegrationAction({

@@ -41,8 +41,8 @@ const OrganizationSchema: Schema = new Schema(
       default: 'pending_payment' 
     },
     metaConfig: {
-      wabaId: { type: String, sparse: true },
-      phoneNumberId: { type: String, sparse: true },
+      wabaId: { type: String,},
+      phoneNumberId: { type: String,},
       accessToken: { type: String, select: false },
       status: { type: String, enum: ['pending', 'ready', 'disconnected'], default: 'pending' },
       connectedAt: Date,

@@ -77,7 +77,7 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
         },
         {
           session,
-          new: true,
+          returnDocument: 'after',
         }
       ).select('walletBalance');
 
@@ -115,6 +115,7 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
     if (error instanceof AppError) {
       throw error;
     }
+    console.error('Transaction failed while queueing template message:', error);
     throw new AppError('Financial transaction failed. Message was not queued.', 500);
   } finally {
     await session.endSession();

@@ -90,22 +90,35 @@ export const createTemplateInMeta = async (
     throw new AppError('Meta integration is incomplete. Missing WABA ID or access token.', 400);
   }
 
-  await axios.post(
-    `https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/message_templates`,
-    {
-      name: payload.name,
-      language: payload.language,
-      category: normalizeTemplateCategory(payload.category),
-      components: payload.components,
-      allow_category_change: payload.allowCategoryChange,
-    },
-    {
-      headers: {
-        ...buildMetaHeaders(accessToken),
-        'Content-Type': 'application/json',
+  try {
+    // 1. Wrap the Axios call in a try/catch
+    await axios.post(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/message_templates`,
+      {
+        name: payload.name,
+        language: payload.language,
+        category: normalizeTemplateCategory(payload.category),
+        components: payload.components,
+        allow_category_change: payload.allowCategoryChange,
       },
+      {
+        headers: {
+          ...buildMetaHeaders(accessToken),
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  } catch (error: any) {
+    // 2. Extract Meta's deeply nested error details
+    const metaError = error.response?.data?.error;
+    if (metaError) {
+      // Meta puts the human-readable reason in one of these three fields depending on the error type
+      const detailMessage = metaError.error_user_msg || metaError.error_data?.details || metaError.message;
+      throw new AppError(`Meta Template Error: ${detailMessage}`, 400);
     }
-  );
+    // Fallback if it's a network timeout
+    throw new AppError('Failed to create template in Meta. Provider did not respond.', 502);
+  }
 
   await syncTemplatesFromMeta(org);
 
