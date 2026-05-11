@@ -52,7 +52,11 @@ const processInboundMessage = async (orgId: any, value: any, message: any) => {
     value.contacts?.[0];
   const profileName = matchedContact?.profile?.name;
 
-  const subscriber = await upsertSubscriber(orgId, phoneNumber, profileName);
+  const subscriber = await upsertSubscriber(orgId, phoneNumber, profileName, {
+    waId: matchedContact?.wa_id,
+    direction: 'inbound',
+    optInSource: 'whatsapp_inbound',
+  });
 
   let messageText = '';
   if (message.type === 'text') {
@@ -64,7 +68,8 @@ const processInboundMessage = async (orgId: any, value: any, message: any) => {
   const conversation = await getOrCreateActiveConversation(
     orgId,
     subscriber._id as any,
-    messageText
+    messageText,
+    'inbound'
   );
 
   await Message.updateOne(

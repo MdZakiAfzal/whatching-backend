@@ -5,13 +5,13 @@ import { PlanManager } from '../utils/planManager';
 import Organization from '../models/Organization';
 import WhatsAppTemplate from '../models/WhatsAppTemplate';
 import Transaction from '../models/Transaction';
-import Subscriber from '../models/Subscriber';
 import { enqueueTemplateSendJob } from '../queues/templateSendQueue';
 import Message from '../models/Message';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
 import { getOrCreateActiveConversation } from '../services/conversationService';
 import { logIntegrationAction } from '../services/integrationLogService';
+import { upsertSubscriber } from '../services/subscriberService';
 
 export const sendTemplateMessage = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   const { phoneNumber, templateName, languageCode = 'en_US', components = [] } = req.body;
@@ -44,14 +44,10 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
 
   const fee = config.meta.templateFee;
 
-  let subscriber = await Subscriber.findOne({ orgId: org._id, phoneNumber });
-  if (!subscriber) {
-    subscriber = await Subscriber.create({
-      orgId: org._id,
-      phoneNumber,
-      isOptedIn: true
-    });
-  }
+  const subscriber = await upsertSubscriber(org._id, phoneNumber, undefined, {
+    direction: 'outbound',
+    optInSource: 'manual',
+  });
 
   const conversation = await getOrCreateActiveConversation(
     org._id,
