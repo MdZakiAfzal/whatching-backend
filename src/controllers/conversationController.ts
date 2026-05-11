@@ -12,6 +12,35 @@ const parsePagination = (query: Record<string, unknown>) => {
   return { page, limit, skip: (page - 1) * limit };
 };
 
+const buildReplyWindow = (lastInboundAt?: Date | null) => {
+  if (!lastInboundAt) {
+    return {
+      isOpen: false,
+      expiresAt: null,
+      remainingMs: 0,
+    };
+  }
+
+  const expiresAt = new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000);
+  const remainingMs = Math.max(0, expiresAt.getTime() - Date.now());
+
+  return {
+    isOpen: remainingMs > 0,
+    expiresAt,
+    remainingMs,
+  };
+};
+
+const serializeConversation = (conversation: any) => {
+  const plainConversation =
+    typeof conversation.toObject === 'function' ? conversation.toObject() : conversation;
+
+  return {
+    ...plainConversation,
+    replyWindow: buildReplyWindow(plainConversation.lastInboundAt),
+  };
+};
+
 export const listConversations = catchAsync(async (req: any, res: Response) => {
   const { page, limit, skip } = parsePagination(req.query);
   const filter: Record<string, unknown> = { orgId: req.org._id };
@@ -22,6 +51,14 @@ export const listConversations = catchAsync(async (req: any, res: Response) => {
 
   if (typeof req.query.assignedTo === 'string' && req.query.assignedTo.length > 0) {
     filter.assignedTo = req.query.assignedTo;
+  }
+
+  if (typeof req.query.priority === 'string' && ['low', 'normal', 'high'].includes(req.query.priority)) {
+    filter.priority = req.query.priority;
+  }
+
+  if (req.query.unreadOnly === 'true') {
+    filter.unreadCount = { $gt: 0 };
   }
 
   if (typeof req.query.q === 'string' && req.query.q.trim().length > 0) {
@@ -59,7 +96,29 @@ export const listConversations = catchAsync(async (req: any, res: Response) => {
       total,
       totalPages: Math.max(1, Math.ceil(total / limit)),
     },
-    data: { conversations },
+    data: {
+      conversations: conversations.map(serializeConversation),
+    },
+  });
+});
+
+export const getConversation = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const conversation = await Conversation.findOne({
+    _id: req.params.conversationId,
+    orgId: req.org._id,
+  })
+    .populate('subscriberId', 'phoneNumber waId firstName lastName tags metadata isOptedIn optInSource lastInteraction lastInboundAt lastOutboundAt')
+    .populate('assignedTo', 'name email phoneNumber');
+
+  if (!conversation) {
+    return next(new AppError('Conversation not found for this organization.', 404));
+  }
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      conversation: serializeConversation(conversation),
+    },
   });
 });
 
@@ -102,7 +161,13 @@ export const getConversationMessages = catchAsync(async (req: any, res: Response
       total,
       totalPages: Math.max(1, Math.ceil(total / limit)),
     },
-    data: { messages },
+    data: {
+      conversation: {
+        id: String(conversation._id),
+        unreadCount: 0,
+      },
+      messages,
+    },
   });
 });
 
@@ -140,7 +205,7 @@ export const assignConversation = catchAsync(async (req: any, res: Response, nex
 
   res.status(200).json({
     status: 'success',
-    data: { conversation },
+    data: { conversation: serializeConversation(conversation) },
   });
 });
 
@@ -164,6 +229,6 @@ export const updateConversationStatus = catchAsync(async (req: any, res: Respons
 
   res.status(200).json({
     status: 'success',
-    data: { conversation },
+    data: { conversation: serializeConversation(conversation) },
   });
 });

@@ -1,12 +1,14 @@
 import { connectDB } from './loaders/database';
 import { startWhatsAppWebhookWorker } from './workers/whatsappWebhookWorker';
 import { startTemplateSendWorker } from './workers/templateSendWorker'; // NEW
+import { startTextReplyWorker } from './workers/textReplyWorker';
 
 const bootstrapWorker = async () => {
   await connectDB();
 
   const whatsappWorker = startWhatsAppWebhookWorker();
   const templateWorker = startTemplateSendWorker(); // NEW
+  const textReplyWorker = startTextReplyWorker();
 
   // --- WhatsApp Webhook Worker Events ---
   whatsappWorker.on('ready', () => {
@@ -30,6 +32,16 @@ const bootstrapWorker = async () => {
     );
   });
 
+  textReplyWorker.on('ready', () => {
+    console.log('👷 Text Reply worker is ready');
+  });
+
+  textReplyWorker.on('failed', (job, error) => {
+    console.error(
+      `🛑 Text Reply job failed: jobId=${job?.id ?? 'unknown'} error=${error.message}`
+    );
+  });
+
   // --- Graceful Shutdown ---
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received. Shutting down workers gracefully...`);
@@ -37,7 +49,8 @@ const bootstrapWorker = async () => {
     // Safely close both workers concurrently before exiting
     await Promise.all([
       whatsappWorker.close(),
-      templateWorker.close()
+      templateWorker.close(),
+      textReplyWorker.close()
     ]);
     
     process.exit(0);

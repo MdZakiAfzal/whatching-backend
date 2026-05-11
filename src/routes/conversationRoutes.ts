@@ -7,8 +7,10 @@ import { validate } from '../middlewares/validateMiddleware';
 import {
   assignConversationSchema,
   conversationParamsSchema,
+  replyToConversationSchema,
   updateConversationStatusSchema,
 } from '../validations/inboxValidation';
+import * as messageController from '../controllers/messageController';
 
 const router = express.Router();
 
@@ -22,6 +24,12 @@ router.get(
   validate(conversationParamsSchema),
   conversationController.getConversationMessages
 );
+router.get(
+  '/:conversationId',
+  restrictTo('owner', 'admin', 'agent'),
+  validate(conversationParamsSchema),
+  conversationController.getConversation
+);
 router.patch(
   '/:conversationId/assign',
   restrictTo('owner', 'admin'),
@@ -33,6 +41,12 @@ router.patch(
   restrictTo('owner', 'admin', 'agent'),
   validate(updateConversationStatusSchema),
   conversationController.updateConversationStatus
+);
+router.post(
+  '/:conversationId/reply',
+  restrictTo('owner', 'admin', 'agent'),
+  validate(replyToConversationSchema),
+  messageController.sendTextReply
 );
 
 export default router;

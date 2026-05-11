@@ -112,6 +112,7 @@ Demo path:
 4. assignment to agents
 5. conversation status updates
 6. delivery/read/failed status sync
+7. agent text replies within the active customer service window
 
 ### Phase 3: Broadcast Slice
 
@@ -348,9 +349,11 @@ Keep existing routes and harden them.
 ### Inbox
 
 - `GET /api/v1/organizations/conversations`
+- `GET /api/v1/organizations/conversations/:conversationId`
 - `GET /api/v1/organizations/conversations/:conversationId/messages`
 - `PATCH /api/v1/organizations/conversations/:conversationId/assign`
 - `PATCH /api/v1/organizations/conversations/:conversationId/status`
+- `POST /api/v1/organizations/conversations/:conversationId/reply`
 
 ### Subscribers
 

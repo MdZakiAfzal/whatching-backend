@@ -32,6 +32,15 @@ export const updateConversationStatusSchema = z.object({
   }),
 });
 
+export const replyToConversationSchema = z.object({
+  params: z.object({
+    conversationId: objectIdSchema,
+  }),
+  body: z.object({
+    text: z.string().trim().min(1, 'Reply text is required').max(4096, 'Reply text is too long'),
+  }),
+});
+
 export const updateSubscriberSchema = z.object({
   params: z.object({
     subscriberId: objectIdSchema,

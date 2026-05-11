@@ -10,6 +10,25 @@ const parsePagination = (query: Record<string, unknown>) => {
   return { page, limit, skip: (page - 1) * limit };
 };
 
+const buildReplyWindow = (lastInboundAt?: Date | null) => {
+  if (!lastInboundAt) {
+    return {
+      isOpen: false,
+      expiresAt: null,
+      remainingMs: 0,
+    };
+  }
+
+  const expiresAt = new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000);
+  const remainingMs = Math.max(0, expiresAt.getTime() - Date.now());
+
+  return {
+    isOpen: remainingMs > 0,
+    expiresAt,
+    remainingMs,
+  };
+};
+
 export const listSubscribers = catchAsync(async (req: any, res: Response) => {
   const { page, limit, skip } = parsePagination(req.query);
   const filter: Record<string, unknown> = { orgId: req.org._id };
@@ -66,13 +85,18 @@ export const getSubscriber = catchAsync(async (req: any, res: Response, next: Ne
   const conversation = await Conversation.findOne({
     orgId: req.org._id,
     subscriberId: subscriber._id,
-  }).select('_id status assignedTo lastMessage lastMessageAt unreadCount');
+  }).select('_id status assignedTo lastMessage lastMessageAt lastInboundAt lastOutboundAt unreadCount priority');
 
   res.status(200).json({
     status: 'success',
     data: {
       subscriber,
-      conversation,
+      conversation: conversation
+        ? {
+            ...conversation.toObject(),
+            replyWindow: buildReplyWindow(conversation.lastInboundAt),
+          }
+        : null,
     },
   });
 });

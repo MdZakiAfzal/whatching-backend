@@ -8,34 +8,43 @@ export const getOrCreateActiveConversation = async (
   direction: 'inbound' | 'outbound' = 'outbound'
 ) => {
   const now = new Date();
-  const update: Record<string, unknown> = {
-    lastMessage: lastMessageText,
-    lastMessageAt: now,
-    channel: 'whatsapp',
-  };
-
-  const inc: Record<string, number> = {};
-
-  if (direction === 'inbound') {
-    update.status = 'open';
-    update.lastInboundAt = now;
-    inc.unreadCount = 1;
-  } else {
-    update.lastOutboundAt = now;
-  }
+  const update =
+    direction === 'inbound'
+      ? {
+          $set: {
+            lastMessage: lastMessageText,
+            lastMessageAt: now,
+            lastInboundAt: now,
+            status: 'open',
+            channel: 'whatsapp',
+          },
+          $inc: { unreadCount: 1 },
+          $setOnInsert: {
+            priority: 'normal',
+          },
+        }
+      : {
+          $set: {
+            lastMessage: lastMessageText,
+            lastMessageAt: now,
+            lastOutboundAt: now,
+            channel: 'whatsapp',
+          },
+          $setOnInsert: {
+            status: 'open',
+            priority: 'normal',
+            unreadCount: 0,
+          },
+        };
 
   return await Conversation.findOneAndUpdate(
     { orgId, subscriberId },
-    { 
-      $set: update,
-      ...(Object.keys(inc).length > 0 ? { $inc: inc } : {}),
-      $setOnInsert: {
-        status: 'open',
-        priority: 'normal',
-        unreadCount: 0,
-        channel: 'whatsapp',
-      }
-    },
-    { upsert: true, returnDocument: 'after', runValidators: true }
+    update,
+    {
+      upsert: true,
+      returnDocument: 'after',
+      runValidators: true,
+      setDefaultsOnInsert: false,
+    }
   );
 };
