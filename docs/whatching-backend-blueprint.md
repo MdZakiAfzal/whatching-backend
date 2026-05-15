@@ -353,6 +353,7 @@ Keep existing routes and harden them.
 - `GET /api/v1/organizations/conversations/:conversationId/messages`
 - `PATCH /api/v1/organizations/conversations/:conversationId/assign`
 - `PATCH /api/v1/organizations/conversations/:conversationId/status`
+- `PATCH /api/v1/organizations/conversations/:conversationId/read`
 - `POST /api/v1/organizations/conversations/:conversationId/reply`
 
 ### Subscribers

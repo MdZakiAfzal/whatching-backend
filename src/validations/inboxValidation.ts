@@ -41,6 +41,12 @@ export const replyToConversationSchema = z.object({
   }),
 });
 
+export const markConversationReadSchema = z.object({
+  params: z.object({
+    conversationId: objectIdSchema,
+  }),
+});
+
 export const updateSubscriberSchema = z.object({
   params: z.object({
     subscriberId: objectIdSchema,

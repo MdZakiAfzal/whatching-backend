@@ -77,7 +77,7 @@ export const listConversations = catchAsync(async (req: any, res: Response) => {
     };
   }
 
-  const [conversations, total] = await Promise.all([
+  const [conversations, total, summaryAgg] = await Promise.all([
     Conversation.find(filter)
       .populate('subscriberId', 'phoneNumber waId firstName lastName tags isOptedIn lastInteraction')
       .populate('assignedTo', 'name email phoneNumber')
@@ -85,7 +85,40 @@ export const listConversations = catchAsync(async (req: any, res: Response) => {
       .skip(skip)
       .limit(limit),
     Conversation.countDocuments(filter),
+    Conversation.aggregate([
+      {
+        $match: { orgId: req.org._id },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          open: {
+            $sum: { $cond: [{ $eq: ['$status', 'open'] }, 1, 0] },
+          },
+          pending: {
+            $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] },
+          },
+          resolved: {
+            $sum: { $cond: [{ $eq: ['$status', 'resolved'] }, 1, 0] },
+          },
+          unread: {
+            $sum: {
+              $cond: [{ $gt: ['$unreadCount', 0] }, 1, 0],
+            },
+          },
+        },
+      },
+    ]),
   ]);
+
+  const summary = summaryAgg[0] || {
+    total: 0,
+    open: 0,
+    pending: 0,
+    resolved: 0,
+    unread: 0,
+  };
 
   res.status(200).json({
     status: 'success',
@@ -97,6 +130,7 @@ export const listConversations = catchAsync(async (req: any, res: Response) => {
       totalPages: Math.max(1, Math.ceil(total / limit)),
     },
     data: {
+      summary,
       conversations: conversations.map(serializeConversation),
     },
   });
@@ -148,10 +182,6 @@ export const getConversationMessages = catchAsync(async (req: any, res: Response
     }),
   ]);
 
-  await Conversation.findByIdAndUpdate(conversation._id, {
-    $set: { unreadCount: 0 },
-  });
-
   res.status(200).json({
     status: 'success',
     results: messages.length,
@@ -164,7 +194,7 @@ export const getConversationMessages = catchAsync(async (req: any, res: Response
     data: {
       conversation: {
         id: String(conversation._id),
-        unreadCount: 0,
+        unreadCount: conversation.unreadCount,
       },
       messages,
     },
@@ -206,6 +236,37 @@ export const assignConversation = catchAsync(async (req: any, res: Response, nex
   res.status(200).json({
     status: 'success',
     data: { conversation: serializeConversation(conversation) },
+  });
+});
+
+export const markConversationRead = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const conversation = await Conversation.findOneAndUpdate(
+    {
+      _id: req.params.conversationId,
+      orgId: req.org._id,
+    },
+    {
+      $set: {
+        unreadCount: 0,
+      },
+    },
+    {
+      returnDocument: 'after',
+      runValidators: true,
+    }
+  )
+    .populate('assignedTo', 'name email phoneNumber')
+    .populate('subscriberId', 'phoneNumber waId firstName lastName');
+
+  if (!conversation) {
+    return next(new AppError('Conversation not found for this organization.', 404));
+  }
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      conversation: serializeConversation(conversation),
+    },
   });
 });
 

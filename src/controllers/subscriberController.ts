@@ -51,13 +51,36 @@ export const listSubscribers = catchAsync(async (req: any, res: Response) => {
     ];
   }
 
-  const [subscribers, total] = await Promise.all([
+  const [subscribers, total, summaryAgg] = await Promise.all([
     Subscriber.find(filter)
       .sort({ lastInteraction: -1, updatedAt: -1 })
       .skip(skip)
       .limit(limit),
     Subscriber.countDocuments(filter),
+    Subscriber.aggregate([
+      {
+        $match: { orgId: req.org._id },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          optedIn: {
+            $sum: { $cond: ['$isOptedIn', 1, 0] },
+          },
+          optedOut: {
+            $sum: { $cond: ['$isOptedIn', 0, 1] },
+          },
+        },
+      },
+    ]),
   ]);
+
+  const summary = summaryAgg[0] || {
+    total: 0,
+    optedIn: 0,
+    optedOut: 0,
+  };
 
   res.status(200).json({
     status: 'success',
@@ -68,7 +91,10 @@ export const listSubscribers = catchAsync(async (req: any, res: Response) => {
       total,
       totalPages: Math.max(1, Math.ceil(total / limit)),
     },
-    data: { subscribers },
+    data: {
+      summary,
+      subscribers,
+    },
   });
 });
 
@@ -85,7 +111,9 @@ export const getSubscriber = catchAsync(async (req: any, res: Response, next: Ne
   const conversation = await Conversation.findOne({
     orgId: req.org._id,
     subscriberId: subscriber._id,
-  }).select('_id status assignedTo lastMessage lastMessageAt lastInboundAt lastOutboundAt unreadCount priority');
+  })
+    .select('_id status assignedTo lastMessage lastMessageAt lastInboundAt lastOutboundAt unreadCount priority')
+    .populate('assignedTo', 'name email phoneNumber');
 
   res.status(200).json({
     status: 'success',

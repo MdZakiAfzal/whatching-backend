@@ -7,6 +7,7 @@ import { validate } from '../middlewares/validateMiddleware';
 import {
   assignConversationSchema,
   conversationParamsSchema,
+  markConversationReadSchema,
   replyToConversationSchema,
   updateConversationStatusSchema,
 } from '../validations/inboxValidation';
@@ -41,6 +42,12 @@ router.patch(
   restrictTo('owner', 'admin', 'agent'),
   validate(updateConversationStatusSchema),
   conversationController.updateConversationStatus
+);
+router.patch(
+  '/:conversationId/read',
+  restrictTo('owner', 'admin', 'agent'),
+  validate(markConversationReadSchema),
+  conversationController.markConversationRead
 );
 router.post(
   '/:conversationId/reply',
