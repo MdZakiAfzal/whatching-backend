@@ -1,10 +1,8 @@
 import { Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
-import { config } from '../config';
 import { PlanManager } from '../utils/planManager';
 import Organization from '../models/Organization';
 import WhatsAppTemplate from '../models/WhatsAppTemplate';
-import Transaction from '../models/Transaction';
 import { enqueueTemplateSendJob } from '../queues/templateSendQueue';
 import { enqueueTextReplyJob } from '../queues/textReplyQueue';
 import Message from '../models/Message';
@@ -15,6 +13,21 @@ import { logIntegrationAction } from '../services/integrationLogService';
 import { upsertSubscriber } from '../services/subscriberService';
 import Conversation from '../models/Conversation';
 import Subscriber from '../models/Subscriber';
+import { getMessagingBillingState } from '../utils/messagingBilling';
+
+const trackMessagingUsage = async (
+  orgId: mongoose.Types.ObjectId | string,
+  counter: 'templateMessagesSent' | 'sessionMessagesSent'
+) => {
+  try {
+    await Organization.findByIdAndUpdate(orgId, {
+      $inc: { [`usage.${counter}`]: 1 },
+      $set: { 'usage.lastMessageAt': new Date() },
+    });
+  } catch (error) {
+    console.error(`Usage tracking failed for org ${String(orgId)}:`, error);
+  }
+};
 
 export const sendTemplateMessage = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   const { phoneNumber, templateName, languageCode = 'en_US', components = [] } = req.body;
@@ -45,8 +58,6 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
     return next(new AppError(`Cannot send template '${templateName}' because its status is ${template.status}.`, 400));
   }
 
-  const fee = config.meta.templateFee;
-
   const subscriber = await upsertSubscriber(org._id, phoneNumber, undefined, {
     direction: 'outbound',
     optInSource: 'manual',
@@ -61,64 +72,20 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
   const messageId = new mongoose.Types.ObjectId();
   const traceId = `tplsend_${String(org._id)}_${String(messageId)}`;
 
-  const session = await mongoose.startSession();
-  let remainingBalance = org.walletBalance;
-
-  try {
-    await session.withTransaction(async () => {
-      const debitResult = await Organization.findOneAndUpdate(
-        {
-          _id: org._id,
-          walletBalance: { $gte: fee },
-        },
-        {
-          $inc: { walletBalance: -fee },
-        },
-        {
-          session,
-          returnDocument: 'after',
-        }
-      ).select('walletBalance');
-
-      if (!debitResult) {
-        throw new AppError(`Insufficient wallet balance. Sending this message costs ₹${fee}.`, 402);
-      }
-
-      remainingBalance = debitResult.walletBalance;
-
-      await Transaction.create([{
-        orgId: org._id,
-        amount: -fee,
-        type: 'broadcast_fee',
-        status: 'success',
-        description: `Template message queued for ${phoneNumber} (${templateName})`,
-        referenceId: `template_send:${String(messageId)}`,
-      }], { session });
-
-      await Message.create([{
-        _id: messageId,
-        orgId: org._id,
-        conversationId: (conversation as any)._id,
-        subscriberId: subscriber._id,
-        direction: 'outbound',
-        type: 'template',
-        templateId: template.templateId,
-        status: 'queued',
-        payload: {
-          text: `[Template: ${template.name}]`,
-          components,
-        },
-      }], { session });
-    });
-  } catch (error) {
-    if (error instanceof AppError) {
-      throw error;
-    }
-    console.error('Transaction failed while queueing template message:', error);
-    throw new AppError('Financial transaction failed. Message was not queued.', 500);
-  } finally {
-    await session.endSession();
-  }
+  await Message.create({
+    _id: messageId,
+    orgId: org._id,
+    conversationId: (conversation as any)._id,
+    subscriberId: subscriber._id,
+    direction: 'outbound',
+    type: 'template',
+    templateId: template.templateId,
+    status: 'queued',
+    payload: {
+      text: `[Template: ${template.name}]`,
+      components,
+    },
+  });
 
   try {
     await enqueueTemplateSendJob({
@@ -132,50 +99,19 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
       templateId: template.templateId,
       languageCode,
       components,
-      cost: fee,
       initiatedBy: String(req.user._id),
       traceId,
       createdAt: new Date().toISOString(),
     });
   } catch (error) {
-    const refundSession = await mongoose.startSession();
-
-    try {
-      await refundSession.withTransaction(async () => {
-        const refundResult = await Transaction.updateOne(
-          { referenceId: `refund:${String(messageId)}` },
-          {
-            $setOnInsert: {
-              orgId: org._id,
-              amount: fee,
-              type: 'refund',
-              status: 'success',
-              description: `Refund for queue failure while sending ${templateName} to ${phoneNumber}`,
-              referenceId: `refund:${String(messageId)}`,
-            },
-          },
-          { upsert: true, session: refundSession }
-        );
-
-        if (refundResult.upsertedCount > 0) {
-          await Organization.findByIdAndUpdate(org._id, {
-            $inc: { walletBalance: fee },
-          }, { session: refundSession });
-        }
-
-        await Message.findOneAndUpdate(
-          { _id: messageId, orgId: org._id },
-          {
-            status: 'failed',
-            failedAt: new Date(),
-            errorMessage: 'Queueing failed before delivery',
-          },
-          { session: refundSession }
-        );
-      });
-    } finally {
-      await refundSession.endSession();
-    }
+    await Message.findOneAndUpdate(
+      { _id: messageId, orgId: org._id },
+      {
+        status: 'failed',
+        failedAt: new Date(),
+        errorMessage: 'Queueing failed before delivery',
+      }
+    );
 
     await logIntegrationAction({
       orgId: org._id,
@@ -190,8 +126,10 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
       externalRef: String(messageId),
     });
 
-    throw new AppError('Message could not be queued right now. Your wallet has been refunded.', 503);
+    throw new AppError('Message could not be queued right now. Please try again.', 503);
   }
+
+  await trackMessagingUsage(org._id, 'templateMessagesSent');
 
   await logIntegrationAction({
     orgId: org._id,
@@ -203,7 +141,7 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
       templateId: template.templateId,
       templateName,
       phoneNumber,
-      cost: fee,
+      billingMode: getMessagingBillingState(org).mode,
     },
     externalRef: String(messageId),
   });
@@ -213,8 +151,8 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
     message: 'Message queued for delivery successfully.',
     data: {
       messageId: String(messageId),
-      cost: fee,
-      remainingBalance,
+      queueStatus: 'queued',
+      billingMode: getMessagingBillingState(org).mode,
     }
   });
 });
@@ -375,8 +313,10 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
       conversationId: String(conversation._id),
       subscriberId: String(subscriber._id),
     },
-    externalRef: String(messageId),
+      externalRef: String(messageId),
   });
+
+  await trackMessagingUsage(org._id, 'sessionMessagesSent');
 
   res.status(202).json({
     status: 'success',

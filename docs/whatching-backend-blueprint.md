@@ -62,7 +62,7 @@ Already present in the repo:
 
 - auth, verification, password reset
 - organization setup and team membership
-- billing subscriptions and wallet top-ups
+- SaaS billing subscriptions and legacy wallet top-ups
 - Embedded Signup token exchange and org-level Meta config storage
 - WhatsApp webhook verification endpoint
 - payment webhook handling
@@ -121,7 +121,7 @@ Demo path:
 3. schedule or send now
 4. enqueue per-recipient jobs
 5. track per-recipient delivery outcomes
-6. billing integration for wallet usage
+6. usage tracking plus SaaS plan enforcement
 
 ### Phase 4: Flows and Automation
 
@@ -146,6 +146,12 @@ Extend with:
 - `metaConfig.lastHealthCheckAt`
 - `metaConfig.businessAccountName`
 - `metaConfig.displayPhoneNumber`
+- `messagingBilling.mode`
+- `messagingBilling.provider`
+- `messagingBilling.creditSharingStatus`
+- `usage.templateMessagesSent`
+- `usage.sessionMessagesSent`
+- `usage.lastMessageAt`
 
 #### Subscriber
 
@@ -331,6 +337,7 @@ Keep existing routes and harden them.
 - `GET /api/v1/organizations`
 - `PATCH /api/v1/organizations/connect-meta`
 - `GET /api/v1/organizations/integration-status`
+  - includes `messagingBilling`
 - `POST /api/v1/organizations/integration/sync`
 
 ### Templates
@@ -414,8 +421,15 @@ Worker:
 2. snapshot audience
 3. create recipient jobs
 4. worker sends per recipient
-5. update billing consumption
+5. update usage counters and plan-governed limits
 6. roll up stats to `Broadcast`
+
+## Billing Model
+
+- Whatching uses Razorpay for SaaS subscription billing only.
+- Meta messaging usage is billed directly to the connected business by default.
+- Wallet balance is retained only as legacy/internal infrastructure and must not gate template sends or inbox replies.
+- Future partner credit-line support should be added through `messagingBilling.mode = 'partner_credit_line'` instead of reusing wallet deductions.
 
 ## Security Requirements
 

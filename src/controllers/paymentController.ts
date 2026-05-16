@@ -10,6 +10,7 @@ import AppError from '../utils/AppError';
 const OPEN_CHECKOUT_STATUSES = new Set(['created', 'authenticated']);
 const BLOCKED_CHECKOUT_STATUSES = new Set(['pending', 'halted']);
 const TERMINAL_STATUSES = new Set(['cancelled', 'completed', 'expired']);
+const LEGACY_TRANSACTION_TYPES = new Set(['topup', 'broadcast_fee', 'refund']);
 
 const getPlanTierFromPlanId = (planId: string): 'basic' | 'pro' =>
   planId === config.razorpay.plans.pro ? 'pro' : 'basic';
@@ -144,18 +145,32 @@ export const topupWallet = catchAsync(async (req: any, res: Response) => {
 
   res.status(200).json({
     status: 'success',
+    message:
+      'Wallet top-up link created. This balance is legacy/internal and is not used for Meta messaging charges.',
     data: { 
       orderId: paymentLink.id,
-      paymentUrl: paymentLink.short_url, // This is what you were looking for!
+      paymentUrl: paymentLink.short_url,
       amount: paymentLink.amount, 
-      key: config.razorpay.keyId 
+      key: config.razorpay.keyId,
+      legacyWallet: true,
     }
   });
 });
 
 export const getBillingHistory = catchAsync(async (req: any, res: Response) => {
   const transactions = await Transaction.find({ orgId: req.org._id }).sort('-createdAt');
-  res.status(200).json({ status: 'success', data: { transactions } });
+  const decoratedTransactions = transactions.map((transaction) => {
+    const plainTransaction = transaction.toObject();
+    const legacy = LEGACY_TRANSACTION_TYPES.has(plainTransaction.type);
+
+    return {
+      ...plainTransaction,
+      legacy,
+      billingCategory: legacy ? 'legacy_wallet' : 'saas_subscription',
+    };
+  });
+
+  res.status(200).json({ status: 'success', data: { transactions: decoratedTransactions } });
 });
 
 export const cancelMySubscription = catchAsync(async (req: any, res: Response, next: NextFunction) => {

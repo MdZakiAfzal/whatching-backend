@@ -1,11 +1,9 @@
 import { Job, Worker } from 'bullmq';
 import axios from 'axios';
-import mongoose from 'mongoose';
 import Organization from '../models/Organization';
 import Message from '../models/Message';
-import Transaction from '../models/Transaction';
-import { config } from '../config';
 import { getOrCreateActiveConversation } from '../services/conversationService';
+import { logIntegrationAction } from '../services/integrationLogService';
 import { QUEUE_NAMES } from '../queues/names';
 import { TemplateSendJobData } from '../queues/templateSendQueue';
 import { createWorkerConnection } from '../queues/redis';
@@ -28,81 +26,44 @@ const markMessageSent = async (
   });
 };
 
-const markMessageFailedAndRefund = async (
+const markMessageFailed = async (
   messageId: string,
-  orgId: string,
-  subscriberPhone: string,
-  amount: number,
   description: string,
   errorCode?: string
 ) => {
-  const session = await mongoose.startSession();
-
-  try {
-    await session.withTransaction(async () => {
-      await Message.findByIdAndUpdate(
-        messageId,
-        {
-          status: 'failed',
-          failedAt: new Date(),
-          errorCode,
-          errorMessage: description,
-        },
-        { session }
-      );
-
-      const refundReferenceId = `refund:${messageId}`;
-      const refundResult = await Transaction.updateOne(
-        { referenceId: refundReferenceId },
-        {
-          $setOnInsert: {
-            orgId,
-            amount,
-            type: 'refund',
-            status: 'success',
-            description,
-            referenceId: refundReferenceId,
-          },
-        },
-        { upsert: true, session }
-      );
-
-      if (refundResult.upsertedCount > 0) {
-        await Organization.findByIdAndUpdate(
-          orgId,
-          { $inc: { walletBalance: amount } },
-          { session }
-        );
-      }
-    });
-  } finally {
-    await session.endSession();
-  }
+  await Message.findByIdAndUpdate(messageId, {
+    status: 'failed',
+    failedAt: new Date(),
+    errorCode,
+    errorMessage: description,
+  });
 };
 
 const processTemplateSendJob = async (job: Job<TemplateSendJobData>) => {
   const data = job.data;
-
-  // 1. Fetch Organization & Decrypt Token
-  const org = await Organization.findById(data.orgId).select('+metaConfig.accessToken');
-  if (!org?.metaConfig?.accessToken) {
-    throw new Error(`Missing access token for org: ${data.orgId}`);
-  }
-  const token = decrypt(org.metaConfig.accessToken);
-
-  // 2. Construct Meta Graph API Payload
-  const payload = {
-    messaging_product: 'whatsapp',
-    to: data.subscriberPhone,
-    type: 'template',
-    template: {
-      name: data.templateName,
-      language: { code: data.languageCode },
-      components: data.components || []
-    }
-  };
+  const maxAttempts = job.opts.attempts ?? 1;
+  const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
 
   try {
+    // 1. Fetch Organization & Decrypt Token
+    const org = await Organization.findById(data.orgId).select('+metaConfig.accessToken');
+    if (!org?.metaConfig?.accessToken) {
+      throw new Error(`Missing access token for org: ${data.orgId}`);
+    }
+    const token = decrypt(org.metaConfig.accessToken);
+
+    // 2. Construct Meta Graph API Payload
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: data.subscriberPhone,
+      type: 'template',
+      template: {
+        name: data.templateName,
+        language: { code: data.languageCode },
+        components: data.components || []
+      }
+    };
+
     // 3. Fire to Meta
     const response = await axios.post(
       `https://graph.facebook.com/v20.0/${data.phoneNumberId}/messages`,
@@ -131,36 +92,39 @@ const processTemplateSendJob = async (job: Job<TemplateSendJobData>) => {
     throw new Error('Meta did not return a message id for the outbound template send.');
   } catch (error: any) {
     console.error(`❌ Meta API Error (Org: ${data.orgId}):`, error.response?.data || error.message);
+    const providerError = error.response?.data?.error;
+    const shouldFinalize = Boolean(providerError) || isFinalAttempt;
 
-    if (error.response?.data?.error) {
-      await markMessageFailedAndRefund(
-        data.messageId,
-        data.orgId,
-        data.subscriberPhone,
-        data.cost,
-        `Refund for failed delivery to ${data.subscriberPhone} (Meta Error: ${error.response.data.error.code})`,
-        String(error.response.data.error.code)
-      );
-      console.log(`💰 Refunded ₹${data.cost} to Org ${data.orgId} due to Meta rejection.`);
-      return;
+    if (!shouldFinalize) {
+      throw error;
     }
 
-    const maxAttempts = job.opts.attempts ?? 1;
-    const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
+    const failureDescription = providerError
+      ? `Meta rejected outbound template send (${providerError.code || 'unknown'}): ${
+          providerError.message || 'Unknown Meta error'
+        }`
+      : `Outbound template send failed: ${error.message}`;
 
-    if (isFinalAttempt) {
-      await markMessageFailedAndRefund(
-        data.messageId,
-        data.orgId,
-        data.subscriberPhone,
-        data.cost,
-        `Refund for delivery failure to ${data.subscriberPhone}: ${error.message}`
-      );
-      console.log(`💰 Refunded ₹${data.cost} to Org ${data.orgId} after final retry failure.`);
-      return;
-    }
+    await markMessageFailed(
+      data.messageId,
+      failureDescription,
+      providerError ? String(providerError.code) : undefined
+    );
 
-    throw error;
+    await logIntegrationAction({
+      orgId: data.orgId,
+      actorUserId: data.initiatedBy,
+      action: 'template_send_failed',
+      status: 'failed',
+      details: {
+        messageId: data.messageId,
+        templateId: data.templateId,
+        templateName: data.templateName,
+        phoneNumber: data.subscriberPhone,
+        reason: failureDescription,
+      },
+      externalRef: data.messageId,
+    });
   }
 };
 

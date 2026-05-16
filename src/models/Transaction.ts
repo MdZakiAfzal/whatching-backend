@@ -2,7 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface ITransaction extends Document {
   orgId: mongoose.Types.ObjectId;
-  amount: number; // Positive for top-up, negative for message cost
+  amount: number; // Positive or negative historical billing amount
   type: 'topup' | 'broadcast_fee' | 'refund' | 'subscription_payment';
   status: 'pending' | 'success' | 'failed';
   description: string;

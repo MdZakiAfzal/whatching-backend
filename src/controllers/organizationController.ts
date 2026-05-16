@@ -7,6 +7,7 @@ import AppError from '../utils/AppError';
 import { decrypt, encrypt } from '../utils/encryption';
 import * as whatsappService from '../services/whatsappService';
 import { logIntegrationAction } from '../services/integrationLogService';
+import { getMessagingBillingState } from '../utils/messagingBilling';
 
 const getMetaAccessTokenFromBody = (body: Record<string, unknown>) => {
   const accessToken = typeof body.accessToken === 'string' ? body.accessToken.trim() : '';
@@ -32,6 +33,22 @@ const ensureMetaAssetOwnership = async (orgId: string, wabaId: string, phoneNumb
   }
 };
 
+const serializeOrganization = (organization: any) => {
+  const plainOrganization =
+    organization && typeof organization.toObject === 'function'
+      ? organization.toObject()
+      : organization;
+
+  if (!plainOrganization) {
+    return plainOrganization;
+  }
+
+  return {
+    ...plainOrganization,
+    messagingBilling: getMessagingBillingState(plainOrganization),
+  };
+};
+
 // STAGE 1: Create the basic business identity
 export const setupOrganization = catchAsync(async (req: any, res: Response) => {
   const { name } = req.body;
@@ -42,7 +59,7 @@ export const setupOrganization = catchAsync(async (req: any, res: Response) => {
 
   res.status(201).json({
     status: 'success',
-    data: { organization },
+    data: { organization: serializeOrganization(organization) },
   });
 });
 
@@ -102,7 +119,7 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
 
     res.status(200).json({
       status: 'success',
-      data: { organization }
+      data: { organization: serializeOrganization(organization) }
     });
   } catch (error: any) {
     await logIntegrationAction({
@@ -142,7 +159,8 @@ export const getIntegrationStatus = catchAsync(async (req: any, res: Response) =
         webhookVerified: !!org.metaConfig?.webhookVerifiedAt,
         webhookVerifiedAt: org.metaConfig?.webhookVerifiedAt || null,
         lastHealthCheckAt: org.metaConfig?.lastHealthCheckAt || null,
-        lastTemplateSyncAt: org.metaConfig?.lastTemplateSyncAt || null
+        lastTemplateSyncAt: org.metaConfig?.lastTemplateSyncAt || null,
+        messagingBilling: getMessagingBillingState(org),
       }
     }
   });
@@ -194,6 +212,7 @@ export const syncMetaIntegration = catchAsync(async (req: any, res: Response) =>
           connectedAt: organization.metaConfig.connectedAt || null,
           lastHealthCheckAt: organization.metaConfig.lastHealthCheckAt || null,
           lastTemplateSyncAt: organization.metaConfig.lastTemplateSyncAt || null,
+          messagingBilling: getMessagingBillingState(organization),
         },
       },
     });
@@ -221,7 +240,7 @@ export const getMyOrganizations = catchAsync(async (req: any, res: Response) => 
   res.status(200).json({
     status: 'success',
     results: organizations.length,
-    data: { organizations }
+    data: { organizations: organizations.map(serializeOrganization) }
   });
 });
 
@@ -230,7 +249,7 @@ export const getOrganization = catchAsync(async (req: any, res: Response) => {
   res.status(200).json({
     status: 'success',
     data: { 
-      organization: req.org 
+      organization: serializeOrganization(req.org)
     }
   });
 });

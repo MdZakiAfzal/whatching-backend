@@ -15,7 +15,6 @@ export interface TemplateSendJobData {
   templateId: string;
   languageCode: string;
   components: any[]; // For dynamic variables like {{1}}
-  cost: number;
   initiatedBy: string; // The user ID who triggered the send
   traceId: string;
   createdAt: string;

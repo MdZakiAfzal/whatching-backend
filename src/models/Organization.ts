@@ -1,4 +1,9 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import {
+  MessagingBillingCreditSharingStatus,
+  MessagingBillingMode,
+  MessagingBillingProvider,
+} from '../utils/messagingBilling';
 
 export interface IOrganization extends Document {
   name: string;
@@ -17,10 +22,19 @@ export interface IOrganization extends Document {
     businessAccountName?: string;
     displayPhoneNumber?: string;
   };
+  messagingBilling: {
+    mode: MessagingBillingMode;
+    provider: MessagingBillingProvider;
+    creditSharingStatus: MessagingBillingCreditSharingStatus;
+    lineOfCreditId?: string;
+  };
   walletBalance: number;
   usage: {
     aiTokensUsed: number;
     subscribersCount: number;
+    templateMessagesSent: number;
+    sessionMessagesSent: number;
+    lastMessageAt?: Date;
   };
   razorpaySubscriptionId?: string; 
   razorpayCustomerId?: string;
@@ -52,10 +66,31 @@ const OrganizationSchema: Schema = new Schema(
       businessAccountName: String,
       displayPhoneNumber: String,
     },
-    walletBalance: { type: Number, default: 0 }, // For promotional msg credits
+    messagingBilling: {
+      mode: {
+        type: String,
+        enum: ['meta_direct', 'partner_credit_line'],
+        default: 'meta_direct',
+      },
+      provider: {
+        type: String,
+        enum: ['meta'],
+        default: 'meta',
+      },
+      creditSharingStatus: {
+        type: String,
+        enum: ['not_applicable', 'pending', 'shared', 'revoked'],
+        default: 'not_applicable',
+      },
+      lineOfCreditId: { type: String, trim: true },
+    },
+    walletBalance: { type: Number, default: 0 }, // Legacy internal balance. Not used for Meta messaging charges.
     usage: {
       aiTokensUsed: { type: Number, default: 0 },
       subscribersCount: { type: Number, default: 0 },
+      templateMessagesSent: { type: Number, default: 0 },
+      sessionMessagesSent: { type: Number, default: 0 },
+      lastMessageAt: Date,
     },
     razorpaySubscriptionId: { type: String, sparse: true },
     razorpayCustomerId: { type: String, sparse: true },
