@@ -7,6 +7,7 @@ import { QUEUE_NAMES } from '../queues/names';
 import { WhatsAppWebhookJobData } from '../queues/whatsappWebhookQueue';
 import { createWorkerConnection } from '../queues/redis';
 import Organization from '../models/Organization';
+import { syncBroadcastRecipientFromMessageStatus } from '../services/broadcastService';
 
 const updateMessageStatus = async (
   orgId: string,
@@ -36,13 +37,30 @@ const updateMessageStatus = async (
     return;
   }
 
-  await Message.findOneAndUpdate(
+  const message = await Message.findOneAndUpdate(
     {
       orgId,
       metaMessageId: statusPayload.id,
     },
-    update
+    update,
+    {
+      returnDocument: 'after',
+    }
   );
+
+  if (!message) {
+    return;
+  }
+
+  await syncBroadcastRecipientFromMessageStatus({
+    orgId,
+    messageId: message._id,
+    metaMessageId: statusPayload.id,
+    normalizedStatus,
+    eventTimestamp,
+    errorCode: statusPayload.errors?.[0]?.code ? String(statusPayload.errors[0].code) : undefined,
+    errorMessage: statusPayload.errors?.[0]?.title || statusPayload.errors?.[0]?.message,
+  });
 };
 
 const processInboundMessage = async (orgId: any, value: any, message: any) => {

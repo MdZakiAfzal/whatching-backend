@@ -14,20 +14,7 @@ import { upsertSubscriber } from '../services/subscriberService';
 import Conversation from '../models/Conversation';
 import Subscriber from '../models/Subscriber';
 import { getMessagingBillingState } from '../utils/messagingBilling';
-
-const trackMessagingUsage = async (
-  orgId: mongoose.Types.ObjectId | string,
-  counter: 'templateMessagesSent' | 'sessionMessagesSent'
-) => {
-  try {
-    await Organization.findByIdAndUpdate(orgId, {
-      $inc: { [`usage.${counter}`]: 1 },
-      $set: { 'usage.lastMessageAt': new Date() },
-    });
-  } catch (error) {
-    console.error(`Usage tracking failed for org ${String(orgId)}:`, error);
-  }
-};
+import { trackMessagingUsage } from '../services/usageService';
 
 export const sendTemplateMessage = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   const { phoneNumber, templateName, languageCode = 'en_US', components = [] } = req.body;

@@ -2,6 +2,7 @@ import { connectDB } from './loaders/database';
 import { startWhatsAppWebhookWorker } from './workers/whatsappWebhookWorker';
 import { startTemplateSendWorker } from './workers/templateSendWorker'; // NEW
 import { startTextReplyWorker } from './workers/textReplyWorker';
+import { startBroadcastFanoutWorker } from './workers/broadcastFanoutWorker';
 
 const bootstrapWorker = async () => {
   await connectDB();
@@ -9,6 +10,7 @@ const bootstrapWorker = async () => {
   const whatsappWorker = startWhatsAppWebhookWorker();
   const templateWorker = startTemplateSendWorker(); // NEW
   const textReplyWorker = startTextReplyWorker();
+  const broadcastWorker = startBroadcastFanoutWorker();
 
   // --- WhatsApp Webhook Worker Events ---
   whatsappWorker.on('ready', () => {
@@ -42,6 +44,16 @@ const bootstrapWorker = async () => {
     );
   });
 
+  broadcastWorker.on('ready', () => {
+    console.log('👷 Broadcast Fanout worker is ready');
+  });
+
+  broadcastWorker.on('failed', (job, error) => {
+    console.error(
+      `🛑 Broadcast Fanout job failed: jobId=${job?.id ?? 'unknown'} error=${error.message}`
+    );
+  });
+
   // --- Graceful Shutdown ---
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received. Shutting down workers gracefully...`);
@@ -50,7 +62,8 @@ const bootstrapWorker = async () => {
     await Promise.all([
       whatsappWorker.close(),
       templateWorker.close(),
-      textReplyWorker.close()
+      textReplyWorker.close(),
+      broadcastWorker.close(),
     ]);
     
     process.exit(0);

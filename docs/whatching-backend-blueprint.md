@@ -74,7 +74,6 @@ Still missing or only stubbed:
 - outbound WhatsApp message sending
 - inbound WhatsApp message persistence
 - conversation message history APIs
-- broadcast orchestration
 - worker/queue infrastructure
 - integration health and audit modules
 
@@ -117,7 +116,7 @@ Demo path:
 ### Phase 3: Broadcast Slice
 
 1. create broadcast
-2. choose audience segment
+2. choose audience by all subscribers, tags, or explicit subscriber selection
 3. schedule or send now
 4. enqueue per-recipient jobs
 5. track per-recipient delivery outcomes
@@ -280,6 +279,14 @@ Fields:
 - `startedAt`
 - `completedAt`
 - `stats`
+- `startedBy`
+- `lastError`
+
+Audience shape currently supported:
+- `mode: 'all'`
+- `mode: 'tags'` with `tags[]` and `tagMatch: 'any' | 'all'`
+- `mode: 'specific'` with `subscriberIds[]`
+- `optedInOnly`
 
 #### BroadcastRecipient
 
@@ -377,6 +384,11 @@ Keep existing routes and harden them.
 - `GET /api/v1/organizations/broadcasts/:broadcastId`
 - `POST /api/v1/organizations/broadcasts/:broadcastId/start`
 - `POST /api/v1/organizations/broadcasts/:broadcastId/cancel`
+
+Behavior:
+- create stores a draft broadcast
+- start can run immediately or accept a future `scheduledAt`
+- detail returns paginated recipients and delivery outcomes
 
 ## Worker Flows
 
