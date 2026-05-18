@@ -44,6 +44,10 @@ const serializeOrganization = (organization: any) => {
     return plainOrganization;
   }
 
+  if (plainOrganization.metaConfig?.accessToken) {
+    delete plainOrganization.metaConfig.accessToken;
+  }
+
   return {
     ...plainOrganization,
     messagingBilling: getMessagingBillingState(plainOrganization),

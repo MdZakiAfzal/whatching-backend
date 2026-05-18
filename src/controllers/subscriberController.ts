@@ -33,6 +33,14 @@ const buildReplyWindow = (lastInboundAt?: Date | null) => {
   };
 };
 
+const chunkArray = <T>(items: T[], chunkSize: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
+};
+
 export const listSubscribers = catchAsync(async (req: any, res: Response) => {
   const { page, limit, skip } = parsePagination(req.query);
   const filter: Record<string, unknown> = { orgId: req.org._id };
@@ -286,37 +294,60 @@ export const importSubscribers = catchAsync(async (req: any, res: Response, next
   }
 
   const now = new Date();
-  const operations = normalizedRows.map((row) => ({
-    updateOne: {
-      filter: {
-        orgId: new mongoose.Types.ObjectId(String(req.org._id)),
-        phoneNumber: row.phoneNumber,
-      },
-      update: {
-        $set: {
-          ...(row.firstName ? { firstName: row.firstName } : {}),
-          ...(row.lastName ? { lastName: row.lastName } : {}),
-          ...(row.tags ? { tags: row.tags } : {}),
-          ...(row.metadata ? { metadata: row.metadata } : {}),
-          ...(typeof row.isOptedIn === 'boolean' ? { isOptedIn: row.isOptedIn } : {}),
-          ...(row.optInSource ? { optInSource: row.optInSource } : {}),
-          lastInteraction: now,
-        },
-        $setOnInsert: {
-          orgId: req.org._id,
+  const orgObjectId = new mongoose.Types.ObjectId(String(req.org._id));
+  const existingOperations = normalizedRows
+    .filter((row) => existingPhoneNumbers.has(row.phoneNumber))
+    .map((row) => ({
+      updateOne: {
+        filter: {
+          orgId: orgObjectId,
           phoneNumber: row.phoneNumber,
-          tags: row.tags || [],
-          metadata: row.metadata || {},
-          isOptedIn: typeof row.isOptedIn === 'boolean' ? row.isOptedIn : true,
-          optInSource: row.optInSource || 'bulk_import',
-          createdAt: now,
+        },
+        update: {
+          $set: {
+            ...(row.firstName ? { firstName: row.firstName } : {}),
+            ...(row.lastName ? { lastName: row.lastName } : {}),
+            ...(row.tags ? { tags: row.tags } : {}),
+            ...(row.metadata ? { metadata: row.metadata } : {}),
+            ...(typeof row.isOptedIn === 'boolean' ? { isOptedIn: row.isOptedIn } : {}),
+            ...(row.optInSource ? { optInSource: row.optInSource } : {}),
+            lastInteraction: now,
+          },
         },
       },
-      upsert: true,
-    },
-  }));
+    }));
 
-  await Subscriber.bulkWrite(operations, { ordered: false });
+  const newOperations = normalizedRows
+    .filter((row) => !existingPhoneNumbers.has(row.phoneNumber))
+    .map((row) => ({
+      updateOne: {
+        filter: {
+          orgId: orgObjectId,
+          phoneNumber: row.phoneNumber,
+        },
+        update: {
+          $set: {
+            ...(row.firstName ? { firstName: row.firstName } : {}),
+            ...(row.lastName ? { lastName: row.lastName } : {}),
+            tags: row.tags || [],
+            metadata: row.metadata || {},
+            isOptedIn: typeof row.isOptedIn === 'boolean' ? row.isOptedIn : true,
+            optInSource: row.optInSource || 'bulk_import',
+            lastInteraction: now,
+          },
+          $setOnInsert: {
+            orgId: req.org._id,
+            phoneNumber: row.phoneNumber,
+            createdAt: now,
+          },
+        },
+        upsert: true,
+      },
+    }));
+
+  for (const operationsChunk of chunkArray([...existingOperations, ...newOperations], 1000)) {
+    await Subscriber.bulkWrite(operationsChunk, { ordered: false });
+  }
 
   const latestSubscriberCount = await Subscriber.countDocuments({ orgId: req.org._id });
   await Organization.findByIdAndUpdate(req.org._id, {

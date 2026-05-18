@@ -55,7 +55,10 @@ export const getTemplates = catchAsync(async (req: any, res: Response) => {
 });
 
 export const getTemplateDrafts = catchAsync(async (req: any, res: Response) => {
-  const drafts = await TemplateDraft.find({ orgId: req.org._id })
+  const drafts = await TemplateDraft.find({
+    orgId: req.org._id,
+    status: { $nin: ['approved', 'deleted'] },
+  })
     .sort({ updatedAt: -1 })
     .populate('createdBy', 'name email')
     .populate('updatedBy', 'name email');
@@ -86,6 +89,11 @@ export const getTemplateDraft = catchAsync(async (req: any, res: Response, next:
 });
 
 export const createTemplateDraft = catchAsync(async (req: any, res: Response) => {
+  await templateService.ensureTemplateDraftNameAvailability({
+    orgId: String(req.org._id),
+    name: req.body.name,
+  });
+
   const draft = await TemplateDraft.create({
     orgId: req.org._id,
     createdBy: req.user._id,
@@ -126,9 +134,16 @@ export const updateTemplateDraft = catchAsync(async (req: any, res: Response, ne
     return next(new AppError('Template draft not found for this organization.', 404));
   }
 
-  if (!['draft', 'rejected'].includes(draft.status)) {
+  if (!['draft', 'rejected', 'disabled'].includes(draft.status)) {
     return next(new AppError(`Template drafts in status ${draft.status} cannot be edited.`, 409));
   }
+
+  await templateService.ensureTemplateDraftNameAvailability({
+    orgId: String(req.org._id),
+    name: req.body.name ?? draft.name,
+    excludeDraftId: String(draft._id),
+    linkedMetaTemplateId: draft.metaTemplateId,
+  });
 
   Object.assign(draft, {
     ...req.body,
@@ -154,13 +169,11 @@ export const deleteTemplateDraft = catchAsync(async (req: any, res: Response, ne
     return next(new AppError('Template draft not found for this organization.', 404));
   }
 
-  if (!['draft', 'rejected', 'disabled', 'deleted'].includes(draft.status)) {
+  if (!['draft', 'rejected', 'disabled'].includes(draft.status)) {
     return next(new AppError(`Template drafts in status ${draft.status} cannot be deleted.`, 409));
   }
 
-  draft.status = 'deleted';
-  draft.updatedBy = req.user._id;
-  await draft.save();
+  await TemplateDraft.deleteOne({ _id: draft._id, orgId: req.org._id });
 
   await logIntegrationAction({
     orgId: req.org._id,
@@ -177,8 +190,7 @@ export const deleteTemplateDraft = catchAsync(async (req: any, res: Response, ne
 
   res.status(200).json({
     status: 'success',
-    message: 'Template draft archived successfully.',
-    data: { draft },
+    message: 'Template draft deleted successfully.',
   });
 });
 
@@ -206,6 +218,11 @@ export const createTemplate = catchAsync(async (req: any, res: Response, next: N
   }
 
   try {
+    await templateService.ensureTemplateDraftNameAvailability({
+      orgId: String(req.org._id),
+      name: req.body.name,
+    });
+
     const template = await templateService.createTemplateInMeta(org, req.body);
     await logIntegrationAction({
       orgId: req.org._id,
@@ -257,9 +274,16 @@ export const submitTemplateDraft = catchAsync(async (req: any, res: Response, ne
     return next(new AppError('Template draft not found for this organization.', 404));
   }
 
-  if (!['draft', 'rejected'].includes(draft.status)) {
+  if (!['draft', 'rejected', 'disabled'].includes(draft.status)) {
     return next(new AppError(`Template drafts in status ${draft.status} cannot be submitted.`, 409));
   }
+
+  await templateService.ensureTemplateDraftNameAvailability({
+    orgId: String(req.org._id),
+    name: draft.name,
+    excludeDraftId: String(draft._id),
+    linkedMetaTemplateId: draft.metaTemplateId,
+  });
 
   draft.status = 'submitted';
   draft.updatedBy = req.user._id;

@@ -105,8 +105,10 @@ export const resolveBroadcastComponentsForSubscriber = (
             normalizedParameter.value &&
             typeof normalizedParameter.value === 'object'
           ) {
+            const { value: _value, ...metaSafeParameter } = normalizedParameter;
+
             return {
-              ...normalizedParameter,
+              ...metaSafeParameter,
               text: resolveBroadcastParameterText(
                 subscriber,
                 normalizedParameter.value as DynamicValueSource
@@ -115,6 +117,25 @@ export const resolveBroadcastComponentsForSubscriber = (
           }
 
           return parameter;
+        })
+      : component.parameters;
+
+    return {
+      ...component,
+      ...(parameters ? { parameters } : {}),
+    };
+  });
+
+export const sanitizeMetaTemplateComponents = (components: Record<string, unknown>[]) =>
+  components.map((component) => {
+    const parameters = Array.isArray(component.parameters)
+      ? component.parameters.map((parameter) => {
+          if (!parameter || typeof parameter !== 'object') {
+            return parameter;
+          }
+
+          const { value: _value, ...metaSafeParameter } = parameter as Record<string, unknown>;
+          return metaSafeParameter;
         })
       : component.parameters;
 

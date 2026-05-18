@@ -16,6 +16,7 @@ import Subscriber from '../models/Subscriber';
 import { getMessagingBillingState } from '../utils/messagingBilling';
 import { trackMessagingUsage } from '../services/usageService';
 import { uploadAgentReplyAttachment } from '../services/mediaService';
+import { sanitizeMetaTemplateComponents } from '../services/broadcastPersonalizationService';
 
 type UploadedAttachment = {
   buffer: Buffer;
@@ -76,6 +77,9 @@ const buildReplyPreviewText = ({
 export const sendTemplateMessage = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   const { phoneNumber, templateName, languageCode = 'en_US', components = [] } = req.body;
   const org = req.org;
+  const metaSafeComponents = sanitizeMetaTemplateComponents(
+    Array.isArray(components) ? components : []
+  );
 
   // 1. PLAN VERIFICATION: Ensure the business has outbound messaging rights
   const plan = new PlanManager(org);
@@ -127,7 +131,7 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
     status: 'queued',
     payload: {
       text: `[Template: ${template.name}]`,
-      components,
+      components: metaSafeComponents,
     },
   });
 
@@ -142,7 +146,7 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
       templateName,
       templateId: template.templateId,
       languageCode,
-      components,
+      components: metaSafeComponents,
       initiatedBy: String(req.user._id),
       traceId,
       createdAt: new Date().toISOString(),

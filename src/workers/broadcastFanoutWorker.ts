@@ -28,6 +28,7 @@ import { trackMessagingUsage } from '../services/usageService';
 import {
   buildBroadcastPreviewText,
   resolveBroadcastComponentsForSubscriber,
+  sanitizeMetaTemplateComponents,
 } from '../services/broadcastPersonalizationService';
 
 const BROADCAST_CHUNK_SIZE = 250;
@@ -346,6 +347,7 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
     broadcast.payload.components || [],
     subscriber
   );
+  const metaSafeComponents = sanitizeMetaTemplateComponents(resolvedComponents);
   const previewText =
     buildBroadcastPreviewText(broadcast.payload.components || [], subscriber) ||
     `[Broadcast: ${broadcast.name}]`;
@@ -369,7 +371,7 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
       status: 'queued',
       payload: {
         text: previewText,
-        components: resolvedComponents,
+        components: metaSafeComponents,
         broadcastId: String(broadcast._id),
         broadcastName: broadcast.name,
       },
@@ -389,7 +391,7 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
     template: {
       name: broadcast.template.name,
       language: { code: broadcast.template.language },
-      components: resolvedComponents,
+      components: metaSafeComponents,
     },
   };
 
@@ -420,7 +422,7 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
       payload: {
         text: previewText,
         to: recipient.phoneNumber,
-        components: resolvedComponents,
+        components: metaSafeComponents,
         broadcastId: String(broadcast._id),
       },
     });

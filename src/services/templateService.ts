@@ -13,6 +13,8 @@ const buildMetaHeaders = (accessToken: string) => ({
 const normalizeTemplateStatus = (status?: string) => status?.trim().toUpperCase() || 'PENDING';
 
 const normalizeTemplateCategory = (category?: string) => category?.trim().toUpperCase() || 'UTILITY';
+const buildExactCaseInsensitiveNameRegex = (name: string) =>
+  new RegExp(`^${name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
 export const mapTemplateStatusToDraftStatus = (status?: string) => {
   const normalized = normalizeTemplateStatus(status);
@@ -46,6 +48,57 @@ const syncDraftFromTemplate = async (orgId: any, template: any) => {
       },
     }
   );
+};
+
+export const ensureTemplateDraftNameAvailability = async ({
+  orgId,
+  name,
+  excludeDraftId,
+  linkedMetaTemplateId,
+}: {
+  orgId: string;
+  name: string;
+  excludeDraftId?: string;
+  linkedMetaTemplateId?: string;
+}) => {
+  const normalizedNameRegex = buildExactCaseInsensitiveNameRegex(name);
+
+  const [matchingTemplate, matchingDraft] = await Promise.all([
+    WhatsAppTemplate.findOne({
+      orgId,
+      name: normalizedNameRegex,
+      status: { $ne: 'ARCHIVED' },
+      ...(linkedMetaTemplateId
+        ? {
+            templateId: { $ne: linkedMetaTemplateId },
+          }
+        : {}),
+    }).select('templateId name language status'),
+    TemplateDraft.findOne({
+      orgId,
+      name: normalizedNameRegex,
+      status: { $nin: ['deleted', 'approved'] },
+      ...(excludeDraftId
+        ? {
+            _id: { $ne: excludeDraftId },
+          }
+        : {}),
+    }).select('_id name language status'),
+  ]);
+
+  if (matchingTemplate) {
+    throw new AppError(
+      `A Meta template named '${matchingTemplate.name}' already exists in this organization. Please use a different template name.`,
+      409
+    );
+  }
+
+  if (matchingDraft) {
+    throw new AppError(
+      `A template draft named '${matchingDraft.name}' already exists in this organization. Please use a different template name.`,
+      409
+    );
+  }
 };
 
 export const syncTemplatesFromMeta = async (org: any) => {
@@ -179,7 +232,45 @@ export const createTemplateInMeta = async (
   return template;
 };
 
+const cleanupLinkedMetaTemplateBeforeResubmission = async (org: any, draft: any) => {
+  if (!draft.metaTemplateId) {
+    return;
+  }
+
+  const linkedTemplate = await WhatsAppTemplate.findOne({
+    orgId: org._id,
+    templateId: draft.metaTemplateId,
+  });
+
+  if (!linkedTemplate || !['REJECTED', 'DISABLED', 'PENDING_DELETION'].includes(linkedTemplate.status)) {
+    return;
+  }
+
+  try {
+    await axios.delete(`https://graph.facebook.com/${GRAPH_API_VERSION}/${org.metaConfig.wabaId}/message_templates`, {
+      headers: buildMetaHeaders(org.metaConfig.accessToken),
+      params: {
+        name: linkedTemplate.name,
+        hsm_id: linkedTemplate.templateId,
+      },
+    });
+  } catch (error: any) {
+    const metaError = error.response?.data?.error;
+    const detailMessage = metaError?.error_user_msg || metaError?.error_data?.details || metaError?.message;
+    throw new AppError(
+      detailMessage ||
+        'The previously rejected Meta template could not be replaced. Rename the draft or try syncing templates again.',
+      409
+    );
+  }
+
+  await WhatsAppTemplate.deleteOne({ _id: linkedTemplate._id });
+  draft.metaTemplateId = undefined;
+};
+
 export const submitTemplateDraftToMeta = async (org: any, draft: any) => {
+  await cleanupLinkedMetaTemplateBeforeResubmission(org, draft);
+
   const template = await createTemplateInMeta(org, {
     name: draft.name,
     language: draft.language,
