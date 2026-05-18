@@ -5,13 +5,20 @@ export interface IMessage extends Document {
   conversationId: mongoose.Types.ObjectId;
   subscriberId: mongoose.Types.ObjectId;
   direction: 'inbound' | 'outbound';
-  type: 'text' | 'image' | 'template' | 'unknown';
+  type: 'text' | 'image' | 'audio' | 'document' | 'video' | 'template' | 'unknown';
   metaMessageId?: string;
   templateId?: string;
   status: 'queued' | 'received' | 'sent' | 'delivered' | 'read' | 'failed';
   payload: {
     text?: string;
     mediaId?: string;
+    mediaUrl?: string;
+    mimeType?: string;
+    publicId?: string;
+    caption?: string;
+    filename?: string;
+    sha256?: string;
+    storageStatus?: 'pending' | 'stored' | 'failed';
     [key: string]: unknown;
   };
   errorCode?: string;
@@ -27,7 +34,11 @@ const MessageSchema: Schema = new Schema({
   conversationId: { type: Schema.Types.ObjectId, ref: 'Conversation', required: true },
   subscriberId: { type: Schema.Types.ObjectId, ref: 'Subscriber', required: true },
   direction: { type: String, enum: ['inbound', 'outbound'], required: true },
-  type: { type: String, enum: ['text', 'image', 'template', 'unknown'], default: 'text' },
+  type: {
+    type: String,
+    enum: ['text', 'image', 'audio', 'document', 'video', 'template', 'unknown'],
+    default: 'text',
+  },
   metaMessageId: { type: String, trim: true },
   templateId: { type: String },
   status: { type: String, enum: ['queued', 'received', 'sent', 'delivered', 'read', 'failed'], required: true },

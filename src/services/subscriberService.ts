@@ -1,6 +1,7 @@
 import Subscriber, { ISubscriber } from '../models/Subscriber';
 import Organization from '../models/Organization';
 import mongoose from 'mongoose';
+import { normalizePhoneNumber } from '../utils/phoneNumber';
 
 interface UpsertSubscriberOptions {
   waId?: string;
@@ -14,7 +15,8 @@ export const upsertSubscriber = async (
   profileName?: string,
   options: UpsertSubscriberOptions = {}
 ): Promise<ISubscriber> => {
-  let subscriber = await Subscriber.findOne({ orgId, phoneNumber });
+  const normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
+  let subscriber = await Subscriber.findOne({ orgId, phoneNumber: normalizedPhoneNumber });
   const interactionTime = new Date();
 
   if (subscriber) {
@@ -37,9 +39,9 @@ export const upsertSubscriber = async (
     return await subscriber.save();
   }
 
-  subscriber = await Subscriber.create({
+    subscriber = await Subscriber.create({
     orgId,
-    phoneNumber,
+    phoneNumber: normalizedPhoneNumber,
     waId: options.waId,
     firstName: profileName || 'WhatsApp User',
     isOptedIn: true,

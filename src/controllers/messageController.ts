@@ -4,7 +4,7 @@ import { PlanManager } from '../utils/planManager';
 import Organization from '../models/Organization';
 import WhatsAppTemplate from '../models/WhatsAppTemplate';
 import { enqueueTemplateSendJob } from '../queues/templateSendQueue';
-import { enqueueTextReplyJob } from '../queues/textReplyQueue';
+import { enqueueAgentReplyJob, AgentReplyMessageType } from '../queues/agentReplyQueue';
 import Message from '../models/Message';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
@@ -15,6 +15,63 @@ import Conversation from '../models/Conversation';
 import Subscriber from '../models/Subscriber';
 import { getMessagingBillingState } from '../utils/messagingBilling';
 import { trackMessagingUsage } from '../services/usageService';
+import { uploadAgentReplyAttachment } from '../services/mediaService';
+
+type UploadedAttachment = {
+  buffer: Buffer;
+  originalname: string;
+  mimetype: string;
+};
+
+const deriveAttachmentMessageType = (
+  file: UploadedAttachment,
+  requestedType?: string
+): AgentReplyMessageType => {
+  if (requestedType && ['image', 'document', 'audio', 'video'].includes(requestedType)) {
+    return requestedType as AgentReplyMessageType;
+  }
+
+  if (file.mimetype.startsWith('image/')) {
+    return 'image';
+  }
+
+  if (file.mimetype.startsWith('audio/')) {
+    return 'audio';
+  }
+
+  if (file.mimetype.startsWith('video/')) {
+    return 'video';
+  }
+
+  return 'document';
+};
+
+const buildReplyPreviewText = ({
+  messageType,
+  text,
+  caption,
+  filename,
+}: {
+  messageType: AgentReplyMessageType;
+  text?: string;
+  caption?: string;
+  filename?: string;
+}) => {
+  if (messageType === 'text') {
+    return text || '[Empty Reply]';
+  }
+
+  const typeLabel = messageType.charAt(0).toUpperCase() + messageType.slice(1);
+  if (caption) {
+    return caption;
+  }
+
+  if (filename) {
+    return `[${typeLabel}: ${filename}]`;
+  }
+
+  return `[${typeLabel} Reply]`;
+};
 
 export const sendTemplateMessage = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   const { phoneNumber, templateName, languageCode = 'en_US', components = [] } = req.body;
@@ -162,8 +219,10 @@ export const getMessage = catchAsync(async (req: any, res: Response, next: NextF
   });
 });
 
-export const sendTextReply = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const { text } = req.body;
+export const sendAgentReply = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const text = typeof req.body.text === 'string' ? req.body.text.trim() : '';
+  const rawCaption = typeof req.body.caption === 'string' ? req.body.caption.trim() : '';
+  const uploadedFile = req.file as UploadedAttachment | undefined;
   const org = req.org;
 
   if (org.metaConfig?.status !== 'ready' || !org.metaConfig.phoneNumberId) {
@@ -198,6 +257,28 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
     );
   }
 
+  if (!uploadedFile && !text) {
+    return next(new AppError('Reply text is required when no attachment is uploaded.', 400));
+  }
+
+  const messageType: AgentReplyMessageType = uploadedFile
+    ? deriveAttachmentMessageType(uploadedFile, req.body.messageType)
+    : 'text';
+  const caption = messageType === 'text' ? '' : rawCaption || text;
+
+  if (messageType === 'text' && !text) {
+    return next(new AppError('Reply text is required for text messages.', 400));
+  }
+
+  const attachment = uploadedFile
+    ? await uploadAgentReplyAttachment({
+        orgId: String(org._id),
+        buffer: uploadedFile.buffer,
+        originalName: uploadedFile.originalname,
+        mimeType: uploadedFile.mimetype,
+      })
+    : undefined;
+
   const latestInboundMessage = await Message.findOne({
     orgId: org._id,
     conversationId: conversation._id,
@@ -208,7 +289,13 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
     .select('metaMessageId');
 
   const messageId = new mongoose.Types.ObjectId();
-  const traceId = `txtreply_${String(org._id)}_${String(messageId)}`;
+  const traceId = `reply_${String(org._id)}_${String(messageId)}`;
+  const previewText = buildReplyPreviewText({
+    messageType,
+    text,
+    caption,
+    filename: attachment?.originalFilename,
+  });
 
   const session = await mongoose.startSession();
   try {
@@ -219,10 +306,19 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
         conversationId: conversation._id,
         subscriberId: subscriber._id,
         direction: 'outbound',
-        type: 'text',
+        type: messageType,
         status: 'queued',
         payload: {
-          text,
+          ...(text ? { text } : {}),
+          ...(caption ? { caption } : {}),
+          ...(attachment
+            ? {
+                mediaUrl: attachment.mediaUrl,
+                mimeType: attachment.mimeType,
+                filename: attachment.originalFilename,
+                publicId: attachment.publicId,
+              }
+            : {}),
         },
       }], { session });
 
@@ -230,7 +326,7 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
         conversation._id,
         {
           $set: {
-            lastMessage: text,
+            lastMessage: previewText,
             lastMessageAt: new Date(),
             lastOutboundAt: new Date(),
             status: 'pending',
@@ -255,13 +351,16 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
   }
 
   try {
-    await enqueueTextReplyJob({
+    await enqueueAgentReplyJob({
       messageId: String(messageId),
       orgId: String(org._id),
       phoneNumberId: org.metaConfig.phoneNumberId,
       subscriberId: String(subscriber._id),
       subscriberPhone: subscriber.phoneNumber,
-      text,
+      messageType,
+      ...(messageType === 'text' && text ? { text } : {}),
+      ...(caption ? { caption } : {}),
+      ...(attachment ? { attachment } : {}),
       initiatedBy: String(req.user._id),
       traceId,
       createdAt: new Date().toISOString(),
@@ -277,12 +376,13 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
     await logIntegrationAction({
       orgId: org._id,
       actorUserId: req.user._id,
-      action: 'text_reply_queue_failed',
+      action: 'agent_reply_queue_failed',
       status: 'failed',
       details: {
         messageId: String(messageId),
         conversationId: String(conversation._id),
         subscriberId: String(subscriber._id),
+        messageType,
       },
       externalRef: String(messageId),
     });
@@ -293,14 +393,15 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
   await logIntegrationAction({
     orgId: org._id,
     actorUserId: req.user._id,
-    action: 'text_reply_queued',
+    action: 'agent_reply_queued',
     status: 'success',
     details: {
       messageId: String(messageId),
       conversationId: String(conversation._id),
       subscriberId: String(subscriber._id),
+      messageType,
     },
-      externalRef: String(messageId),
+    externalRef: String(messageId),
   });
 
   await trackMessagingUsage(org._id, 'sessionMessagesSent');
@@ -311,6 +412,7 @@ export const sendTextReply = catchAsync(async (req: any, res: Response, next: Ne
     data: {
       messageId: String(messageId),
       conversationId: String(conversation._id),
+      messageType,
     },
   });
 });

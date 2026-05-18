@@ -1,4 +1,5 @@
 import { Job, Worker } from 'bullmq';
+import mongoose from 'mongoose';
 import WebhookEvent from '../models/WebhookEvent';
 import Message from '../models/Message';
 import { upsertSubscriber } from '../services/subscriberService';
@@ -8,6 +9,103 @@ import { WhatsAppWebhookJobData } from '../queues/whatsappWebhookQueue';
 import { createWorkerConnection } from '../queues/redis';
 import Organization from '../models/Organization';
 import { syncBroadcastRecipientFromMessageStatus } from '../services/broadcastService';
+import { persistInboundMetaMedia } from '../services/mediaService';
+import { applyTemplateStatusWebhook } from '../services/templateService';
+import { applyPhoneNumberQualityWebhook } from '../services/metaOperationalService';
+
+const extractMessageType = (message: any) => {
+  const normalizedType = String(message?.type || '').toLowerCase();
+  if (['text', 'image', 'audio', 'document', 'video', 'template'].includes(normalizedType)) {
+    return normalizedType as 'text' | 'image' | 'audio' | 'document' | 'video' | 'template';
+  }
+
+  return 'unknown' as const;
+};
+
+const getMessageAsset = (message: any) => {
+  const normalizedType = String(message?.type || '').toLowerCase();
+  if (!normalizedType || typeof message?.[normalizedType] !== 'object') {
+    return null;
+  }
+
+  return message[normalizedType];
+};
+
+const buildInboundMessagePreview = (message: any) => {
+  if (message.type === 'text') {
+    return message.text?.body || '';
+  }
+
+  const asset = getMessageAsset(message);
+  const caption = typeof asset?.caption === 'string' ? asset.caption.trim() : '';
+  const filename = typeof asset?.filename === 'string' ? asset.filename.trim() : '';
+  const label = String(message.type || 'message')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (value) => value.toUpperCase());
+
+  if (caption) {
+    return caption;
+  }
+
+  if (filename) {
+    return `[Received ${label}: ${filename}]`;
+  }
+
+  return `[Received ${label}]`;
+};
+
+const resolveInboundMessagePayload = (message: any) => {
+  const asset = getMessageAsset(message);
+  const preview = buildInboundMessagePreview(message);
+
+  if (message.type === 'text') {
+    return {
+      text: preview,
+    };
+  }
+
+  return {
+    text: preview,
+    ...(asset?.id ? { mediaId: asset.id } : {}),
+    ...(asset?.caption ? { caption: asset.caption } : {}),
+    ...(asset?.filename ? { filename: asset.filename } : {}),
+    ...(asset?.mime_type ? { mimeType: asset.mime_type } : {}),
+    ...(asset?.sha256 ? { sha256: asset.sha256 } : {}),
+    storageStatus: asset?.id ? 'pending' : undefined,
+  };
+};
+
+const resolveOrganizationForChange = async ({
+  orgId,
+  entry,
+  value,
+}: {
+  orgId?: mongoose.Types.ObjectId | string;
+  entry: any;
+  value: any;
+}) => {
+  if (orgId) {
+    return Organization.findById(orgId).select('+metaConfig.accessToken');
+  }
+
+  const phoneNumberId = value?.metadata?.phone_number_id;
+  if (phoneNumberId) {
+    const organization = await Organization.findOne({
+      'metaConfig.phoneNumberId': phoneNumberId,
+    }).select('+metaConfig.accessToken');
+    if (organization) {
+      return organization;
+    }
+  }
+
+  if (entry?.id) {
+    return Organization.findOne({
+      'metaConfig.wabaId': String(entry.id),
+    }).select('+metaConfig.accessToken');
+  }
+
+  return null;
+};
 
 const updateMessageStatus = async (
   orgId: string,
@@ -63,55 +161,112 @@ const updateMessageStatus = async (
   });
 };
 
-const processInboundMessage = async (orgId: any, value: any, message: any) => {
+const processInboundMessage = async (organization: any, value: any, message: any) => {
+  const orgId = organization._id;
   const phoneNumber = message.from;
   const matchedContact =
     value.contacts?.find((contact: any) => String(contact.wa_id || contact.input) === String(phoneNumber)) ||
     value.contacts?.[0];
   const profileName = matchedContact?.profile?.name;
+  const existingMessage = await Message.findOne({
+    orgId,
+    metaMessageId: message.id,
+  }).select('_id payload type');
 
-  const subscriber = await upsertSubscriber(orgId, phoneNumber, profileName, {
-    waId: matchedContact?.wa_id,
-    direction: 'inbound',
-    optInSource: 'whatsapp_inbound',
-  });
+  const inboundPayload = resolveInboundMessagePayload(message);
+  const normalizedType = extractMessageType(message);
 
-  let messageText = '';
-  if (message.type === 'text') {
-    messageText = message.text?.body || '';
+  let subscriber = null;
+  let conversation = null;
+
+  if (!existingMessage) {
+    subscriber = await upsertSubscriber(orgId, phoneNumber, profileName, {
+      waId: matchedContact?.wa_id,
+      direction: 'inbound',
+      optInSource: 'whatsapp_inbound',
+    });
+
+    conversation = await getOrCreateActiveConversation(
+      orgId,
+      subscriber._id as any,
+      inboundPayload.text || '',
+      'inbound'
+    );
+
+    await Message.create({
+      orgId,
+      conversationId: (conversation as any)._id,
+      subscriberId: subscriber._id,
+      direction: 'inbound',
+      type: normalizedType,
+      metaMessageId: message.id,
+      status: 'received',
+      payload: inboundPayload,
+      sentAt: message.timestamp ? new Date(parseInt(message.timestamp, 10) * 1000) : new Date(),
+    });
   } else {
-    messageText = `[Received ${message.type} message]`;
+    subscriber = await upsertSubscriber(orgId, phoneNumber, profileName, {
+      waId: matchedContact?.wa_id,
+      direction: 'inbound',
+      optInSource: 'whatsapp_inbound',
+    });
   }
 
-  const conversation = await getOrCreateActiveConversation(
-    orgId,
-    subscriber._id as any,
-    messageText,
-    'inbound'
-  );
+  const mediaAsset = getMessageAsset(message);
+  const mediaId = typeof mediaAsset?.id === 'string' ? mediaAsset.id : undefined;
 
-  await Message.updateOne(
-    {
-      orgId,
-      metaMessageId: message.id,
-    },
-    {
-      $setOnInsert: {
-        orgId,
-        conversationId: (conversation as any)._id,
-        subscriberId: subscriber._id,
-        direction: 'inbound',
-        type: message.type === 'text' ? 'text' : 'unknown',
-        metaMessageId: message.id,
-        status: 'received',
-        payload: { text: messageText },
-        sentAt: new Date(parseInt(message.timestamp, 10) * 1000),
-      },
-    },
-    { upsert: true }
-  );
+  if (
+    mediaId &&
+    organization.metaConfig?.accessToken &&
+    normalizedType !== 'text' &&
+    (!existingMessage || existingMessage.payload?.storageStatus !== 'stored')
+  ) {
+    try {
+      const persistedMedia = await persistInboundMetaMedia({
+        orgId: String(orgId),
+        encryptedAccessToken: organization.metaConfig.accessToken,
+        phoneNumberId: organization.metaConfig.phoneNumberId,
+        mediaId,
+        messageType: normalizedType,
+        originalFilename: mediaAsset?.filename,
+      });
 
-  console.log(`✅ INBOX: Message from ${profileName || phoneNumber}: "${messageText}"`);
+      await Message.findOneAndUpdate(
+        {
+          orgId,
+          metaMessageId: message.id,
+        },
+        {
+          $set: {
+            payload: {
+              ...inboundPayload,
+              ...persistedMedia,
+              storageStatus: 'stored',
+            },
+          },
+        }
+      );
+    } catch (error: any) {
+      await Message.findOneAndUpdate(
+        {
+          orgId,
+          metaMessageId: message.id,
+        },
+        {
+          $set: {
+            payload: {
+              ...inboundPayload,
+              storageStatus: 'failed',
+              mediaDownloadError: error.message,
+            },
+          },
+        }
+      );
+      console.error(`⚠️ Failed to persist inbound media for org ${String(orgId)}:`, error.message);
+    }
+  }
+
+  console.log(`✅ INBOX: Message from ${profileName || phoneNumber}: "${inboundPayload.text}"`);
 };
 
 const markWebhookProcessed = async (webhookEventId: string) => {
@@ -140,27 +295,59 @@ const processWhatsAppWebhookJob = async (job: Job<WhatsAppWebhookJobData>) => {
   try {
     const payload = webhookEvent.payload;
 
-    if (payload?.object === 'whatsapp_business_account' && webhookEvent.orgId) {
-      await Organization.findByIdAndUpdate(
-        webhookEvent.orgId,
-        {
-          $set: {
-            'metaConfig.webhookVerifiedAt': new Date(),
-            'metaConfig.lastHealthCheckAt': new Date(),
-          },
-        }
-      );
-
+    if (payload?.object === 'whatsapp_business_account') {
       for (const entry of payload.entry ?? []) {
         for (const change of entry.changes ?? []) {
           const value = change?.value;
+          const organization = await resolveOrganizationForChange({
+            orgId: webhookEvent.orgId,
+            entry,
+            value,
+          });
 
-          for (const message of value?.messages ?? []) {
-            await processInboundMessage(webhookEvent.orgId, value, message);
+          if (!organization) {
+            continue;
           }
 
-          for (const statusPayload of value?.statuses ?? []) {
-            await updateMessageStatus(String(webhookEvent.orgId), statusPayload);
+          if (!webhookEvent.orgId) {
+            webhookEvent.orgId = organization._id;
+            await webhookEvent.save();
+          }
+
+          await Organization.findByIdAndUpdate(
+            organization._id,
+            {
+              $set: {
+                'metaConfig.webhookVerifiedAt': new Date(),
+                'metaConfig.lastHealthCheckAt': new Date(),
+              },
+            }
+          );
+
+          if (change?.field === 'messages') {
+            for (const message of value?.messages ?? []) {
+              await processInboundMessage(organization, value, message);
+            }
+
+            for (const statusPayload of value?.statuses ?? []) {
+              await updateMessageStatus(String(organization._id), statusPayload);
+            }
+          }
+
+          if (change?.field === 'message_template_status_update') {
+            await applyTemplateStatusWebhook({
+              orgId: String(organization._id),
+              wabaId: organization.metaConfig?.wabaId,
+              value,
+            });
+          }
+
+          if (change?.field === 'phone_number_quality_update') {
+            await applyPhoneNumberQualityWebhook({
+              organization,
+              event: value?.event,
+              currentLimit: value?.current_limit,
+            });
           }
         }
       }

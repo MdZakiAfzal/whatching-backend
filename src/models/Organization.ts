@@ -8,6 +8,7 @@ import {
 export interface IOrganization extends Document {
   name: string;
   slug: string;
+  timezone: string;
   planTier: 'none' | 'basic' | 'pro' | 'enterprise';
   subscriptionStatus: 'pending_payment' | 'active' | 'past_due' | 'trialing' | 'canceled';
   metaConfig: {
@@ -21,6 +22,17 @@ export interface IOrganization extends Document {
     lastHealthCheckAt?: Date;
     businessAccountName?: string;
     displayPhoneNumber?: string;
+    qualityRating?: string;
+    qualityStatus?: string;
+    messagingLimitTier?: string;
+    lastMessagingLimitSyncAt?: Date;
+    activeAlerts?: Array<{
+      code: string;
+      severity: 'info' | 'warning' | 'critical';
+      message: string;
+      createdAt?: Date;
+      lastTriggeredAt?: Date;
+    }>;
   };
   messagingBilling: {
     mode: MessagingBillingMode;
@@ -44,6 +56,7 @@ const OrganizationSchema: Schema = new Schema(
   {
     name: { type: String, required: true, trim: true },
     slug: { type: String, required: true, unique: true, lowercase: true },
+    timezone: { type: String, default: 'UTC', trim: true },
     planTier: { 
       type: String, 
       enum: ['none', 'basic', 'pro', 'enterprise'], 
@@ -65,6 +78,23 @@ const OrganizationSchema: Schema = new Schema(
       lastHealthCheckAt: Date,
       businessAccountName: String,
       displayPhoneNumber: String,
+      qualityRating: { type: String, trim: true },
+      qualityStatus: { type: String, trim: true },
+      messagingLimitTier: { type: String, trim: true },
+      lastMessagingLimitSyncAt: Date,
+      activeAlerts: [
+        {
+          code: { type: String, required: true, trim: true },
+          severity: {
+            type: String,
+            enum: ['info', 'warning', 'critical'],
+            default: 'info',
+          },
+          message: { type: String, required: true, trim: true },
+          createdAt: Date,
+          lastTriggeredAt: Date,
+        },
+      ],
     },
     messagingBilling: {
       mode: {

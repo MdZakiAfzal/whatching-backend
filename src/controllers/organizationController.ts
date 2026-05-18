@@ -8,6 +8,7 @@ import { decrypt, encrypt } from '../utils/encryption';
 import * as whatsappService from '../services/whatsappService';
 import { logIntegrationAction } from '../services/integrationLogService';
 import { getMessagingBillingState } from '../utils/messagingBilling';
+import { syncOrganizationMessagingHealth } from '../services/metaOperationalService';
 
 const getMetaAccessTokenFromBody = (body: Record<string, unknown>) => {
   const accessToken = typeof body.accessToken === 'string' ? body.accessToken.trim() : '';
@@ -47,6 +48,15 @@ const serializeOrganization = (organization: any) => {
     ...plainOrganization,
     messagingBilling: getMessagingBillingState(plainOrganization),
   };
+};
+
+const isValidIanaTimezone = (timezone: string) => {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 // STAGE 1: Create the basic business identity
@@ -89,7 +99,7 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
     );
     const encryptedToken = encrypt(rawAccessToken);
 
-    const organization = await Organization.findByIdAndUpdate(
+    await Organization.findByIdAndUpdate(
       orgId,
       {
         'metaConfig.wabaId': resolvedConnection.wabaId,
@@ -103,6 +113,11 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
       },
       { returnDocument: 'after', runValidators: true }
     );
+
+    const organization = await Organization.findById(orgId).select('+metaConfig.accessToken');
+    if (organization) {
+      await syncOrganizationMessagingHealth(organization);
+    }
 
     await logIntegrationAction({
       orgId,
@@ -160,6 +175,12 @@ export const getIntegrationStatus = catchAsync(async (req: any, res: Response) =
         webhookVerifiedAt: org.metaConfig?.webhookVerifiedAt || null,
         lastHealthCheckAt: org.metaConfig?.lastHealthCheckAt || null,
         lastTemplateSyncAt: org.metaConfig?.lastTemplateSyncAt || null,
+        lastMessagingLimitSyncAt: org.metaConfig?.lastMessagingLimitSyncAt || null,
+        messagingLimitTier: org.metaConfig?.messagingLimitTier || null,
+        qualityRating: org.metaConfig?.qualityRating || null,
+        qualityStatus: org.metaConfig?.qualityStatus || null,
+        activeAlerts: org.metaConfig?.activeAlerts || [],
+        timezone: org.timezone || 'UTC',
         messagingBilling: getMessagingBillingState(org),
       }
     }
@@ -184,7 +205,7 @@ export const syncMetaIntegration = catchAsync(async (req: any, res: Response) =>
     organization.metaConfig.lastHealthCheckAt = new Date();
     organization.metaConfig.businessAccountName = resolvedConnection.businessAccountName;
     organization.metaConfig.displayPhoneNumber = resolvedConnection.displayPhoneNumber;
-    await organization.save({ validateBeforeSave: false });
+    await syncOrganizationMessagingHealth(organization);
 
     await logIntegrationAction({
       orgId: organization._id,
@@ -212,6 +233,12 @@ export const syncMetaIntegration = catchAsync(async (req: any, res: Response) =>
           connectedAt: organization.metaConfig.connectedAt || null,
           lastHealthCheckAt: organization.metaConfig.lastHealthCheckAt || null,
           lastTemplateSyncAt: organization.metaConfig.lastTemplateSyncAt || null,
+          lastMessagingLimitSyncAt: organization.metaConfig.lastMessagingLimitSyncAt || null,
+          messagingLimitTier: organization.metaConfig.messagingLimitTier || null,
+          qualityRating: organization.metaConfig.qualityRating || null,
+          qualityStatus: organization.metaConfig.qualityStatus || null,
+          activeAlerts: organization.metaConfig.activeAlerts || [],
+          timezone: organization.timezone || 'UTC',
           messagingBilling: getMessagingBillingState(organization),
         },
       },
@@ -251,5 +278,31 @@ export const getOrganization = catchAsync(async (req: any, res: Response) => {
     data: { 
       organization: serializeOrganization(req.org)
     }
+  });
+});
+
+export const updateOrganizationSettings = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { timezone } = req.body;
+
+  if (!isValidIanaTimezone(timezone)) {
+    return next(new AppError('Please provide a valid IANA timezone, for example Asia/Kolkata.', 400));
+  }
+
+  const organization = await Organization.findByIdAndUpdate(
+    req.org._id,
+    {
+      timezone,
+    },
+    {
+      returnDocument: 'after',
+      runValidators: true,
+    }
+  );
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      organization: serializeOrganization(organization),
+    },
   });
 });

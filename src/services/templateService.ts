@@ -2,6 +2,7 @@ import axios from 'axios';
 import { decrypt } from '../utils/encryption';
 import WhatsAppTemplate from '../models/WhatsAppTemplate';
 import AppError from '../utils/AppError';
+import TemplateDraft from '../models/TemplateDraft';
 
 const GRAPH_API_VERSION = 'v20.0';
 
@@ -12,6 +13,40 @@ const buildMetaHeaders = (accessToken: string) => ({
 const normalizeTemplateStatus = (status?: string) => status?.trim().toUpperCase() || 'PENDING';
 
 const normalizeTemplateCategory = (category?: string) => category?.trim().toUpperCase() || 'UTILITY';
+
+export const mapTemplateStatusToDraftStatus = (status?: string) => {
+  const normalized = normalizeTemplateStatus(status);
+
+  if (normalized === 'APPROVED' || normalized === 'REINSTATED') return 'approved';
+  if (normalized === 'REJECTED') return 'rejected';
+  if (normalized === 'DISABLED' || normalized === 'DELETED' || normalized === 'PENDING_DELETION') return 'disabled';
+  if (normalized === 'SUBMITTED') return 'submitted';
+
+  return 'pending_review';
+};
+
+const syncDraftFromTemplate = async (orgId: any, template: any) => {
+  if (!template?.templateId) {
+    return;
+  }
+
+  await TemplateDraft.findOneAndUpdate(
+    {
+      orgId,
+      $or: [
+        { metaTemplateId: template.templateId },
+        { name: template.name, language: template.language },
+      ],
+    },
+    {
+      $set: {
+        metaTemplateId: template.templateId,
+        status: mapTemplateStatusToDraftStatus(template.status),
+        rejectionReason: template.rejectionReason,
+      },
+    }
+  );
+};
 
 export const syncTemplatesFromMeta = async (org: any) => {
   const { wabaId, accessToken } = org.metaConfig;
@@ -26,6 +61,7 @@ export const syncTemplatesFromMeta = async (org: any) => {
   });
 
   const templates = response.data.data ?? [];
+  const activeTemplateIds = templates.map((tpl: any) => tpl.id).filter(Boolean);
 
   const operations = templates.map((tpl: any) => ({
     updateOne: {
@@ -53,7 +89,15 @@ export const syncTemplatesFromMeta = async (org: any) => {
     await WhatsAppTemplate.bulkWrite(operations);
   }
 
-  const activeTemplateIds = templates.map((tpl: any) => tpl.id).filter(Boolean);
+  const syncedTemplates = await WhatsAppTemplate.find({
+    orgId: org._id,
+    templateId: { $in: activeTemplateIds },
+  }).select('templateId name language status rejectionReason');
+
+  for (const template of syncedTemplates) {
+    await syncDraftFromTemplate(org._id, template);
+  }
+
   await WhatsAppTemplate.updateMany(
     {
       orgId: org._id,
@@ -130,6 +174,98 @@ export const createTemplateInMeta = async (
 
   if (!template) {
     throw new AppError('Template was created in Meta but could not be found locally after sync.', 502);
+  }
+
+  return template;
+};
+
+export const submitTemplateDraftToMeta = async (org: any, draft: any) => {
+  const template = await createTemplateInMeta(org, {
+    name: draft.name,
+    language: draft.language,
+    category: draft.category,
+    components: draft.components,
+    allowCategoryChange: draft.allowCategoryChange,
+  });
+
+  draft.metaTemplateId = template.templateId;
+  draft.status = mapTemplateStatusToDraftStatus(template.status);
+  draft.rejectionReason = template.rejectionReason;
+  draft.lastSubmittedAt = new Date();
+  await draft.save();
+
+  return template;
+};
+
+export const applyTemplateStatusWebhook = async ({
+  orgId,
+  wabaId,
+  value,
+}: {
+  orgId?: string;
+  wabaId?: string;
+  value: any;
+}) => {
+  const templateId = value?.message_template_id ? String(value.message_template_id) : undefined;
+  const templateName = value?.message_template_name ? String(value.message_template_name) : undefined;
+  const language = value?.message_template_language ? String(value.message_template_language).trim() : undefined;
+  const event = normalizeTemplateStatus(value?.event);
+  const rejectionReason = value?.reason || value?.rejection_reason || undefined;
+
+  const filter: Record<string, unknown> = {
+    ...(orgId ? { orgId } : {}),
+    ...(wabaId ? { wabaId } : {}),
+  };
+
+  if (!templateId && !(templateName && language)) {
+    return null;
+  }
+
+  if (templateId) {
+    filter.templateId = templateId;
+  } else if (templateName && language) {
+    filter.name = templateName;
+    filter.language = language;
+  }
+
+  const template = await WhatsAppTemplate.findOneAndUpdate(
+    filter,
+    {
+      $set: {
+        ...(wabaId ? { wabaId } : {}),
+        ...(templateId ? { templateId } : {}),
+        ...(templateName ? { name: templateName } : {}),
+        ...(language ? { language } : {}),
+        status: event,
+        rejectionReason,
+        lastSyncedAt: new Date(),
+      },
+    },
+    {
+      upsert: false,
+      returnDocument: 'after',
+      runValidators: true,
+      setDefaultsOnInsert: false,
+    }
+  );
+
+  if (orgId) {
+    await TemplateDraft.findOneAndUpdate(
+      {
+        orgId,
+        $or: [
+          ...(templateId ? [{ metaTemplateId: templateId }] : []),
+          ...(templateName && language ? [{ name: templateName, language }] : []),
+        ],
+      },
+      {
+        $set: {
+          ...(templateId ? { metaTemplateId: templateId } : {}),
+          status: mapTemplateStatusToDraftStatus(event),
+          rejectionReason,
+        },
+      }
+    );
   }
 
   return template;

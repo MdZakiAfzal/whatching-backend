@@ -25,6 +25,10 @@ import { logIntegrationAction } from '../services/integrationLogService';
 import { getOrCreateActiveConversation } from '../services/conversationService';
 import { decrypt } from '../utils/encryption';
 import { trackMessagingUsage } from '../services/usageService';
+import {
+  buildBroadcastPreviewText,
+  resolveBroadcastComponentsForSubscriber,
+} from '../services/broadcastPersonalizationService';
 
 const BROADCAST_CHUNK_SIZE = 250;
 
@@ -338,10 +342,17 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
   }
 
   const token = decrypt(org.metaConfig.accessToken);
+  const resolvedComponents = resolveBroadcastComponentsForSubscriber(
+    broadcast.payload.components || [],
+    subscriber
+  );
+  const previewText =
+    buildBroadcastPreviewText(broadcast.payload.components || [], subscriber) ||
+    `[Broadcast: ${broadcast.name}]`;
   const conversation = await getOrCreateActiveConversation(
     recipient.orgId as any,
     recipient.subscriberId as any,
-    `[Broadcast: ${broadcast.name}]`
+    previewText
   );
 
   const messageId = recipient.messageId || new mongoose.Types.ObjectId();
@@ -357,8 +368,8 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
       templateId: broadcast.template.templateId,
       status: 'queued',
       payload: {
-        text: `[Broadcast: ${broadcast.name}]`,
-        components: broadcast.payload.components,
+        text: previewText,
+        components: resolvedComponents,
         broadcastId: String(broadcast._id),
         broadcastName: broadcast.name,
       },
@@ -378,7 +389,7 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
     template: {
       name: broadcast.template.name,
       language: { code: broadcast.template.language },
-      components: broadcast.payload.components || [],
+      components: resolvedComponents,
     },
   };
 
@@ -407,9 +418,9 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
       errorMessage: undefined,
       failedAt: undefined,
       payload: {
-        text: `[Broadcast: ${broadcast.name}]`,
+        text: previewText,
         to: recipient.phoneNumber,
-        components: broadcast.payload.components,
+        components: resolvedComponents,
         broadcastId: String(broadcast._id),
       },
     });

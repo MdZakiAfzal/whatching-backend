@@ -1,6 +1,7 @@
 import Organization from '../models/Organization';
 import Membership from '../models/Membership';
 import mongoose from 'mongoose';
+import { config } from '../config';
 
 export const createOrganization = async (name: string, userId: mongoose.Types.ObjectId) => {
   // 1. Generate a unique slug (Name + 4 random characters)
@@ -11,6 +12,7 @@ export const createOrganization = async (name: string, userId: mongoose.Types.Ob
   const newOrg = await Organization.create({
     name,
     slug,
+    timezone: config.defaultOrgTimezone,
     planTier: 'none',
     subscriptionStatus: 'pending_payment',
   });

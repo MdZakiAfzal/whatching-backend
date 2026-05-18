@@ -5,6 +5,7 @@ import { setOrgContext } from '../middlewares/orgMiddleware';
 import { restrictTo } from '../middlewares/roleMiddleware';
 import { validate } from '../middlewares/validateMiddleware';
 import {
+  importSubscribersSchema,
   subscriberParamsSchema,
   updateSubscriberSchema,
   updateSubscriberTagsSchema,
@@ -15,6 +16,12 @@ const router = express.Router();
 router.use(protect);
 router.use(setOrgContext);
 
+router.post(
+  '/import',
+  restrictTo('owner', 'admin'),
+  validate(importSubscribersSchema),
+  subscriberController.importSubscribers
+);
 router.get('/', restrictTo('owner', 'admin', 'agent'), subscriberController.listSubscribers);
 router.get(
   '/:subscriberId',

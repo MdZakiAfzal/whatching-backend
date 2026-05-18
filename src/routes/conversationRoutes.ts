@@ -12,6 +12,7 @@ import {
   updateConversationStatusSchema,
 } from '../validations/inboxValidation';
 import * as messageController from '../controllers/messageController';
+import { optionalSingleAttachmentUpload } from '../middlewares/uploadMiddleware';
 
 const router = express.Router();
 
@@ -52,8 +53,9 @@ router.patch(
 router.post(
   '/:conversationId/reply',
   restrictTo('owner', 'admin', 'agent'),
+  optionalSingleAttachmentUpload('attachment'),
   validate(replyToConversationSchema),
-  messageController.sendTextReply
+  messageController.sendAgentReply
 );
 
 export default router;

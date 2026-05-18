@@ -1,16 +1,20 @@
 import { connectDB } from './loaders/database';
 import { startWhatsAppWebhookWorker } from './workers/whatsappWebhookWorker';
 import { startTemplateSendWorker } from './workers/templateSendWorker'; // NEW
-import { startTextReplyWorker } from './workers/textReplyWorker';
+import { startAgentReplyWorker } from './workers/agentReplyWorker';
 import { startBroadcastFanoutWorker } from './workers/broadcastFanoutWorker';
+import { startIntegrationHealthWorker } from './workers/integrationHealthWorker';
+import { registerDailyIntegrationHealthScan } from './queues/integrationHealthQueue';
 
 const bootstrapWorker = async () => {
   await connectDB();
+  await registerDailyIntegrationHealthScan();
 
   const whatsappWorker = startWhatsAppWebhookWorker();
   const templateWorker = startTemplateSendWorker(); // NEW
-  const textReplyWorker = startTextReplyWorker();
+  const agentReplyWorker = startAgentReplyWorker();
   const broadcastWorker = startBroadcastFanoutWorker();
+  const integrationHealthWorker = startIntegrationHealthWorker();
 
   // --- WhatsApp Webhook Worker Events ---
   whatsappWorker.on('ready', () => {
@@ -34,13 +38,13 @@ const bootstrapWorker = async () => {
     );
   });
 
-  textReplyWorker.on('ready', () => {
-    console.log('👷 Text Reply worker is ready');
+  agentReplyWorker.on('ready', () => {
+    console.log('👷 Agent Reply worker is ready');
   });
 
-  textReplyWorker.on('failed', (job, error) => {
+  agentReplyWorker.on('failed', (job, error) => {
     console.error(
-      `🛑 Text Reply job failed: jobId=${job?.id ?? 'unknown'} error=${error.message}`
+      `🛑 Agent Reply job failed: jobId=${job?.id ?? 'unknown'} error=${error.message}`
     );
   });
 
@@ -54,6 +58,16 @@ const bootstrapWorker = async () => {
     );
   });
 
+  integrationHealthWorker.on('ready', () => {
+    console.log('👷 Integration Health worker is ready');
+  });
+
+  integrationHealthWorker.on('failed', (job, error) => {
+    console.error(
+      `🛑 Integration Health job failed: jobId=${job?.id ?? 'unknown'} error=${error.message}`
+    );
+  });
+
   // --- Graceful Shutdown ---
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received. Shutting down workers gracefully...`);
@@ -62,8 +76,9 @@ const bootstrapWorker = async () => {
     await Promise.all([
       whatsappWorker.close(),
       templateWorker.close(),
-      textReplyWorker.close(),
+      agentReplyWorker.close(),
       broadcastWorker.close(),
+      integrationHealthWorker.close(),
     ]);
     
     process.exit(0);

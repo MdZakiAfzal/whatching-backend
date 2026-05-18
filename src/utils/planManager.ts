@@ -15,14 +15,24 @@ export class PlanManager {
     return this.config.features[feature];
   }
 
+  getLimit(type: 'subscribers' | 'agents' | 'aiTokens'): number {
+    const limitMap = {
+      subscribers: this.config.maxSubscribers,
+      agents: this.config.maxAgents,
+      aiTokens: this.config.maxAiTokens,
+    };
+
+    return limitMap[type];
+  }
+
   /**
    * Professional check for numerical limits (Subscribers or Agent Seats)
    */
   isUnderLimit(type: 'subscribers' | 'agents' | 'aiTokens', currentCount: number): boolean {
     const limitMap = {
-      subscribers: this.config.maxSubscribers,
-      agents: this.config.maxAgents,
-      aiTokens: this.config.maxAiTokens, // FIX: Added AI Token limit support
+      subscribers: this.getLimit('subscribers'),
+      agents: this.getLimit('agents'),
+      aiTokens: this.getLimit('aiTokens'), // FIX: Added AI Token limit support
     };
     
     return currentCount < limitMap[type];

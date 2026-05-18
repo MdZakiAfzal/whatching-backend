@@ -35,6 +35,8 @@ export interface IBroadcast extends Document {
     optedInOnly: boolean;
   };
   scheduledAt?: Date;
+  scheduledTimezone?: string;
+  scheduledLocalTime?: string;
   startedAt?: Date;
   completedAt?: Date;
   canceledAt?: Date;
@@ -87,6 +89,8 @@ const BroadcastSchema: Schema = new Schema(
       optedInOnly: { type: Boolean, default: true },
     },
     scheduledAt: Date,
+    scheduledTimezone: { type: String, trim: true },
+    scheduledLocalTime: { type: String, trim: true },
     startedAt: Date,
     completedAt: Date,
     canceledAt: Date,

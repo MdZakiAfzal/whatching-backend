@@ -10,6 +10,7 @@ import { validate } from '../middlewares/validateMiddleware';
 import {
   connectMetaSchema,
   setupOrganizationSchema,
+  updateOrganizationSettingsSchema,
 } from '../validations/organizationValidation';
 
 const router = express.Router();
@@ -25,6 +26,7 @@ router.get('/my-organizations', orgController.getMyOrganizations);
 // Contextual Org Routes (Requires x-org-id header)
 router.use(setOrgContext);
 router.get('/', orgController.getOrganization);
+router.patch('/settings', restrictTo('owner', 'admin'), validate(updateOrganizationSettingsSchema), orgController.updateOrganizationSettings);
 router.patch('/connect-meta', restrictTo('owner'), validate(connectMetaSchema), orgController.connectMeta);
 router.get('/integration-status', restrictTo('owner', 'admin'), orgController.getIntegrationStatus);
 router.post('/integration/sync', restrictTo('owner', 'admin'), orgController.syncMetaIntegration);

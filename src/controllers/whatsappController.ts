@@ -37,14 +37,35 @@ const extractPhoneNumberId = (body: any) => {
   return undefined;
 };
 
+const extractWabaId = (body: any) => {
+  for (const entry of body.entry ?? []) {
+    if (typeof entry?.id === 'string' && entry.id.trim().length > 0) {
+      return entry.id.trim();
+    }
+  }
+
+  return undefined;
+};
+
 const resolveOrgIdFromWebhook = async (body: any) => {
   const phoneNumberId = extractPhoneNumberId(body);
-  if (!phoneNumberId) {
+  if (phoneNumberId) {
+    const organization = await Organization.findOne({
+      'metaConfig.phoneNumberId': phoneNumberId,
+    }).select('_id');
+
+    if (organization) {
+      return String(organization._id);
+    }
+  }
+
+  const wabaId = extractWabaId(body);
+  if (!wabaId) {
     return undefined;
   }
 
   const organization = await Organization.findOne({
-    'metaConfig.phoneNumberId': phoneNumberId,
+    'metaConfig.wabaId': wabaId,
   }).select('_id');
 
   return organization ? String(organization._id) : undefined;

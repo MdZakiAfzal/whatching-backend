@@ -37,7 +37,9 @@ export const replyToConversationSchema = z.object({
     conversationId: objectIdSchema,
   }),
   body: z.object({
-    text: z.string().trim().min(1, 'Reply text is required').max(4096, 'Reply text is too long'),
+    messageType: z.enum(['text', 'image', 'document', 'audio', 'video']).optional(),
+    text: z.string().trim().max(4096, 'Reply text is too long').optional(),
+    caption: z.string().trim().max(1024, 'Caption is too long').optional(),
   }),
 });
 
@@ -66,4 +68,24 @@ export const updateSubscriberTagsSchema = z.object({
   body: z.object({
     tags: z.array(z.string().trim().min(1)).max(50),
   }),
+});
+
+const importSubscriberRowSchema = z.object({
+  phoneNumber: z.string().trim().min(6, 'A valid WhatsApp number is required'),
+  firstName: z.string().trim().min(1).optional(),
+  lastName: z.string().trim().min(1).optional(),
+  tags: z.array(z.string().trim().min(1)).max(50).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  isOptedIn: z.boolean().optional(),
+  optInSource: z.string().trim().min(1).optional(),
+});
+
+export const importSubscribersSchema = z.object({
+  body: z.union([
+    z.object({
+      subscribers: z.array(importSubscriberRowSchema).min(1).max(10000),
+      dryRun: z.boolean().optional(),
+    }),
+    z.array(importSubscriberRowSchema).min(1).max(10000),
+  ]),
 });

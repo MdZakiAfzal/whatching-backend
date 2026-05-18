@@ -17,6 +17,8 @@ import {
   removeScheduledBroadcastStartJob,
 } from '../queues/broadcastFanoutQueue';
 import { logIntegrationAction } from '../services/integrationLogService';
+import { buildBroadcastLimitWarning } from '../services/metaOperationalService';
+import { resolveScheduledBroadcastTime } from '../services/schedulingService';
 
 const TERMINAL_STATUSES = new Set(['completed', 'canceled', 'failed']);
 
@@ -105,6 +107,10 @@ export const createBroadcast = catchAsync(async (req: any, res: Response, next: 
 
   const audience = normalizeAudience(req.body.audience);
   const estimatedRecipients = await countBroadcastAudience(Subscriber, req.org._id, audience);
+  const limitWarning = buildBroadcastLimitWarning({
+    projectedRecipients: estimatedRecipients,
+    messagingLimitTier: org.metaConfig?.messagingLimitTier,
+  });
 
   const broadcast = (await Broadcast.create({
     orgId: req.org._id,
@@ -140,6 +146,7 @@ export const createBroadcast = catchAsync(async (req: any, res: Response, next: 
     data: {
       broadcast,
       estimatedRecipients,
+      warnings: limitWarning ? [limitWarning] : [],
     },
   });
 });
@@ -217,12 +224,19 @@ export const getBroadcast = catchAsync(async (req: any, res: Response, next: Nex
     (broadcast.status === 'draft' || broadcast.status === 'scheduled') && broadcast.stats.totalRecipients === 0
       ? await countBroadcastAudience(Subscriber, req.org._id, broadcast.audience as any)
       : null;
+  const limitWarning = estimatedRecipients
+    ? buildBroadcastLimitWarning({
+        projectedRecipients: estimatedRecipients,
+        messagingLimitTier: req.org.metaConfig?.messagingLimitTier,
+      })
+    : null;
 
   res.status(200).json({
     status: 'success',
     data: {
       broadcast,
       estimatedRecipients,
+      warnings: limitWarning ? [limitWarning] : [],
       recipients,
       recipientsPagination: {
         page,
@@ -261,12 +275,20 @@ export const startBroadcast = catchAsync(async (req: any, res: Response, next: N
     return next(new AppError(`Only draft broadcasts can be started. Current status is ${broadcast.status}.`, 409));
   }
 
-  const scheduledAt = req.body?.scheduledAt ? new Date(req.body.scheduledAt) : null;
-  if (scheduledAt && scheduledAt.getTime() <= Date.now()) {
-    return next(new AppError('scheduledAt must be in the future. Omit it to start immediately.', 400));
-  }
+  const schedule = resolveScheduledBroadcastTime({
+    scheduledAt: req.body?.scheduledAt,
+    scheduledLocal: req.body?.scheduledLocal,
+    timezone: req.body?.timezone,
+    defaultTimezone: req.org.timezone || 'UTC',
+  });
+  const scheduledAt = schedule?.scheduledAt || null;
 
   const nextStatus = scheduledAt ? 'scheduled' : 'processing';
+  const estimatedRecipients = await countBroadcastAudience(Subscriber, req.org._id, broadcast.audience as any);
+  const limitWarning = buildBroadcastLimitWarning({
+    projectedRecipients: estimatedRecipients,
+    messagingLimitTier: req.org.metaConfig?.messagingLimitTier,
+  });
 
   const claimedBroadcast = await Broadcast.findOneAndUpdate(
     {
@@ -278,13 +300,19 @@ export const startBroadcast = catchAsync(async (req: any, res: Response, next: N
       $set: {
         status: nextStatus,
         startedBy: req.user._id,
-        ...(scheduledAt ? { scheduledAt } : {}),
+        ...(scheduledAt
+          ? {
+              scheduledAt,
+              scheduledTimezone: schedule?.scheduledTimezone,
+              scheduledLocalTime: schedule?.scheduledLocalTime,
+            }
+          : {}),
       },
       $unset: {
         canceledAt: 1,
         completedAt: 1,
         lastError: 1,
-        ...(scheduledAt ? {} : { scheduledAt: 1 }),
+        ...(scheduledAt ? {} : { scheduledAt: 1, scheduledTimezone: 1, scheduledLocalTime: 1 }),
       },
     },
     {
@@ -321,6 +349,8 @@ export const startBroadcast = catchAsync(async (req: any, res: Response, next: N
       },
       $unset: {
         scheduledAt: 1,
+        scheduledTimezone: 1,
+        scheduledLocalTime: 1,
         startedBy: 1,
       },
     });
@@ -348,6 +378,8 @@ export const startBroadcast = catchAsync(async (req: any, res: Response, next: N
     details: {
       broadcastId: String(claimedBroadcast._id),
       scheduledAt: scheduledAt?.toISOString(),
+      scheduledTimezone: schedule?.scheduledTimezone,
+      scheduledLocalTime: schedule?.scheduledLocalTime,
     },
     externalRef: String(claimedBroadcast._id),
   });
@@ -361,6 +393,9 @@ export const startBroadcast = catchAsync(async (req: any, res: Response, next: N
       broadcastId: String(claimedBroadcast._id),
       status: claimedBroadcast.status,
       scheduledAt: claimedBroadcast.scheduledAt || null,
+      scheduledTimezone: claimedBroadcast.scheduledTimezone || null,
+      scheduledLocalTime: claimedBroadcast.scheduledLocalTime || null,
+      warnings: limitWarning ? [limitWarning] : [],
     },
   });
 });

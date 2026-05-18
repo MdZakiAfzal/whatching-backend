@@ -8,6 +8,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   FRONTEND_URL: z.string().url().default('http://localhost:3000'),
   EMAIL_DELIVERY_MODE: z.enum(['smtp', 'log']).default('smtp'),
+  DEFAULT_ORG_TIMEZONE: z.string().default('UTC'),
   REDIS_URL: z.string().min(1).default('redis://127.0.0.1:6379'),
   MONGODB_URI: z.string().url(),
   JWT_SECRET: z.string().min(32),
@@ -34,6 +35,7 @@ export const config = {
   env: envVars.data.NODE_ENV,
   frontendUrl: envVars.data.FRONTEND_URL,
   emailDeliveryMode: envVars.data.EMAIL_DELIVERY_MODE,
+  defaultOrgTimezone: envVars.data.DEFAULT_ORG_TIMEZONE,
   redisUrl: envVars.data.REDIS_URL,
   mongoUri: envVars.data.MONGODB_URI,
   emailHost: process.env.EMAIL_HOST,
@@ -41,6 +43,12 @@ export const config = {
   emailUser: process.env.EMAIL_USER,
   emailPassword: process.env.EMAIL_PASSWORD,
   emailFrom: process.env.EMAIL_FROM,
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    apiSecret: process.env.CLOUDINARY_API_SECRET,
+    folder: process.env.CLOUDINARY_FOLDER || 'whatching',
+  },
   jwtSecret: envVars.data.JWT_SECRET,
   meta: {
     appId: envVars.data.META_APP_ID,

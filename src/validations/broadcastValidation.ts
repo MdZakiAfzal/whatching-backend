@@ -5,7 +5,45 @@ const isoDateStringSchema = z
   .string()
   .trim()
   .refine((value) => !Number.isNaN(Date.parse(value)), 'A valid ISO date is required');
-const componentSchema = z.record(z.string(), z.unknown());
+const dynamicValueSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('literal'),
+    text: z.string().trim().min(1, 'Literal text is required'),
+  }),
+  z.object({
+    source: z.literal('subscriber_field'),
+    path: z.enum(['firstName', 'lastName', 'fullName', 'phoneNumber', 'waId']),
+    fallback: z.string().trim().optional(),
+  }),
+  z.object({
+    source: z.literal('metadata_field'),
+    path: z.string().trim().min(1, 'Metadata path is required'),
+    fallback: z.string().trim().optional(),
+  }),
+]);
+
+const componentParameterSchema = z
+  .object({
+    type: z.string().trim().min(1, 'Parameter type is required'),
+    text: z.string().trim().optional(),
+    value: dynamicValueSchema.optional(),
+    image: z.record(z.string(), z.unknown()).optional(),
+    document: z.record(z.string(), z.unknown()).optional(),
+    video: z.record(z.string(), z.unknown()).optional(),
+    currency: z.record(z.string(), z.unknown()).optional(),
+    date_time: z.record(z.string(), z.unknown()).optional(),
+    payload: z.string().trim().optional(),
+  })
+  .passthrough();
+
+const componentSchema = z
+  .object({
+    type: z.string().trim().min(1, 'Component type is required'),
+    sub_type: z.string().trim().optional(),
+    index: z.string().trim().optional(),
+    parameters: z.array(componentParameterSchema).optional(),
+  })
+  .passthrough();
 
 const audienceSchema = z
   .discriminatedUnion('mode', [
@@ -73,9 +111,13 @@ export const startBroadcastSchema = z.object({
   params: z.object({
     broadcastId: objectIdSchema,
   }),
-  body: z.object({
-    scheduledAt: isoDateStringSchema.optional(),
-  }),
+  body: z
+    .object({
+      scheduledAt: isoDateStringSchema.optional(),
+      scheduledLocal: z.string().trim().optional(),
+      timezone: z.string().trim().optional(),
+    })
+    .default({}),
 });
 
 export const cancelBroadcastSchema = z.object({

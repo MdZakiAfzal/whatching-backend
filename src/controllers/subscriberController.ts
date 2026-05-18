@@ -1,8 +1,12 @@
 import { Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
 import Subscriber from '../models/Subscriber';
 import Conversation from '../models/Conversation';
+import Organization from '../models/Organization';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
+import { normalizePhoneNumber } from '../utils/phoneNumber';
+import { PlanManager } from '../utils/planManager';
 
 const parsePagination = (query: Record<string, unknown>) => {
   const page = Math.max(1, Number.parseInt(String(query.page || '1'), 10) || 1);
@@ -176,5 +180,159 @@ export const updateSubscriberTags = catchAsync(async (req: any, res: Response, n
   res.status(200).json({
     status: 'success',
     data: { subscriber },
+  });
+});
+
+export const importSubscribers = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const payloadRows = Array.isArray(req.body) ? req.body : req.body.subscribers;
+  const dryRun = !Array.isArray(req.body) && req.body?.dryRun === true;
+
+  if (!Array.isArray(payloadRows) || payloadRows.length === 0) {
+    return next(new AppError('At least one subscriber row is required.', 400));
+  }
+
+  const org = await Organization.findById(req.org._id);
+  if (!org) {
+    return next(new AppError('Organization not found.', 404));
+  }
+
+  const plan = new PlanManager(org);
+  const dedupedMap = new Map<
+    string,
+    {
+      phoneNumber: string;
+      firstName?: string;
+      lastName?: string;
+      tags?: string[];
+      metadata?: Record<string, unknown>;
+      isOptedIn?: boolean;
+      optInSource?: string;
+    }
+  >();
+
+  const skippedRows: Array<{ phoneNumber?: string; reason: string }> = [];
+
+  for (const row of payloadRows) {
+    const normalizedPhoneNumber = normalizePhoneNumber(row.phoneNumber);
+    if (!normalizedPhoneNumber || normalizedPhoneNumber.length < 6) {
+      skippedRows.push({
+        phoneNumber: row.phoneNumber,
+        reason: 'invalid_phone_number',
+      });
+      continue;
+    }
+
+    if (dedupedMap.has(normalizedPhoneNumber)) {
+      skippedRows.push({
+        phoneNumber: normalizedPhoneNumber,
+        reason: 'duplicate_in_batch',
+      });
+      continue;
+    }
+
+    dedupedMap.set(normalizedPhoneNumber, {
+      phoneNumber: normalizedPhoneNumber,
+      firstName: row.firstName?.trim() || undefined,
+      lastName: row.lastName?.trim() || undefined,
+      ...(Array.isArray(row.tags)
+        ? {
+            tags: Array.from(new Set(row.tags.map((tag: string) => tag.trim()).filter(Boolean))),
+          }
+        : {}),
+      ...(row.metadata ? { metadata: row.metadata } : {}),
+      ...(typeof row.isOptedIn === 'boolean' ? { isOptedIn: row.isOptedIn } : {}),
+      ...(row.optInSource?.trim() ? { optInSource: row.optInSource.trim() } : {}),
+    });
+  }
+
+  const normalizedRows = Array.from(dedupedMap.values());
+  if (normalizedRows.length === 0) {
+    return next(new AppError('No valid subscriber rows were found in this import.', 400));
+  }
+
+  const existingSubscribers = await Subscriber.find({
+    orgId: req.org._id,
+    phoneNumber: { $in: normalizedRows.map((row) => row.phoneNumber) },
+  }).select('phoneNumber');
+
+  const existingPhoneNumbers = new Set(existingSubscribers.map((subscriber) => subscriber.phoneNumber));
+  const newRows = normalizedRows.filter((row) => !existingPhoneNumbers.has(row.phoneNumber));
+  const currentSubscriberCount = await Subscriber.countDocuments({ orgId: req.org._id });
+  const subscriberLimit = plan.getLimit('subscribers');
+
+  if (currentSubscriberCount + newRows.length > subscriberLimit) {
+    return next(
+      new AppError(
+        `This import would exceed your current plan's subscriber limit of ${subscriberLimit}.`,
+        403
+      )
+    );
+  }
+
+  const summary = {
+    totalRows: payloadRows.length,
+    validRows: normalizedRows.length,
+    newSubscribers: newRows.length,
+    updatedSubscribers: normalizedRows.length - newRows.length,
+    skippedRows,
+    dryRun,
+  };
+
+  if (dryRun) {
+    return res.status(200).json({
+      status: 'success',
+      data: { summary },
+    });
+  }
+
+  const now = new Date();
+  const operations = normalizedRows.map((row) => ({
+    updateOne: {
+      filter: {
+        orgId: new mongoose.Types.ObjectId(String(req.org._id)),
+        phoneNumber: row.phoneNumber,
+      },
+      update: {
+        $set: {
+          ...(row.firstName ? { firstName: row.firstName } : {}),
+          ...(row.lastName ? { lastName: row.lastName } : {}),
+          ...(row.tags ? { tags: row.tags } : {}),
+          ...(row.metadata ? { metadata: row.metadata } : {}),
+          ...(typeof row.isOptedIn === 'boolean' ? { isOptedIn: row.isOptedIn } : {}),
+          ...(row.optInSource ? { optInSource: row.optInSource } : {}),
+          lastInteraction: now,
+        },
+        $setOnInsert: {
+          orgId: req.org._id,
+          phoneNumber: row.phoneNumber,
+          tags: row.tags || [],
+          metadata: row.metadata || {},
+          isOptedIn: typeof row.isOptedIn === 'boolean' ? row.isOptedIn : true,
+          optInSource: row.optInSource || 'bulk_import',
+          createdAt: now,
+        },
+      },
+      upsert: true,
+    },
+  }));
+
+  await Subscriber.bulkWrite(operations, { ordered: false });
+
+  const latestSubscriberCount = await Subscriber.countDocuments({ orgId: req.org._id });
+  await Organization.findByIdAndUpdate(req.org._id, {
+    $set: {
+      'usage.subscribersCount': latestSubscriberCount,
+    },
+  });
+
+  res.status(200).json({
+    status: 'success',
+    message: 'Subscribers imported successfully.',
+    data: {
+      summary: {
+        ...summary,
+        currentSubscriberCount: latestSubscriberCount,
+      },
+    },
   });
 });

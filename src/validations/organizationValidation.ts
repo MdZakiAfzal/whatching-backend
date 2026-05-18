@@ -19,3 +19,9 @@ export const connectMetaSchema = z.object({
       path: ['accessToken'],
     }),
 });
+
+export const updateOrganizationSettingsSchema = z.object({
+  body: z.object({
+    timezone: z.string().trim().min(1, 'A valid IANA timezone is required'),
+  }),
+});

@@ -111,16 +111,20 @@ Demo path:
 4. assignment to agents
 5. conversation status updates
 6. delivery/read/failed status sync
-7. agent text replies within the active customer service window
+7. agent replies within the active customer service window
+8. inbound media download from Meta and durable media storage
+9. bulk subscriber import with plan-aware limits
 
 ### Phase 3: Broadcast Slice
 
 1. create broadcast
 2. choose audience by all subscribers, tags, or explicit subscriber selection
-3. schedule or send now
-4. enqueue per-recipient jobs
-5. track per-recipient delivery outcomes
-6. usage tracking plus SaaS plan enforcement
+3. schedule by UTC or local business timezone
+4. personalize template variables per recipient at send time
+5. enqueue per-recipient jobs
+6. track per-recipient delivery outcomes
+7. usage tracking plus SaaS plan enforcement
+8. Meta messaging-tier warnings before large sends
 
 ### Phase 4: Flows and Automation
 
@@ -202,6 +206,25 @@ Indexes:
 - `{ orgId: 1, templateId: 1 }`
 - `{ orgId: 1, name: 1 }`
 - `{ orgId: 1, status: 1 }`
+
+#### TemplateDraft
+
+Purpose:
+- Local pre-submission template editing and review workflow
+
+Fields:
+- `orgId`
+- `createdBy`
+- `updatedBy`
+- `name`
+- `language`
+- `category`
+- `components`
+- `allowCategoryChange`
+- `status`
+- `metaTemplateId`
+- `rejectionReason`
+- `lastSubmittedAt`
 
 #### Message
 
@@ -345,7 +368,9 @@ Keep existing routes and harden them.
 - `PATCH /api/v1/organizations/connect-meta`
 - `GET /api/v1/organizations/integration-status`
   - includes `messagingBilling`
+  - includes `messagingLimitTier`, `qualityRating`, `qualityStatus`, `activeAlerts`, and `timezone`
 - `POST /api/v1/organizations/integration/sync`
+- `PATCH /api/v1/organizations/settings`
 
 ### Templates
 
@@ -354,11 +379,19 @@ Keep existing routes and harden them.
 - `GET /api/v1/organizations/templates/:templateId`
 - `DELETE /api/v1/organizations/templates/:templateId`
 - `POST /api/v1/organizations/templates/sync`
+- `GET /api/v1/organizations/templates/drafts`
+- `POST /api/v1/organizations/templates/drafts`
+- `GET /api/v1/organizations/templates/drafts/:draftId`
+- `PATCH /api/v1/organizations/templates/drafts/:draftId`
+- `POST /api/v1/organizations/templates/drafts/:draftId/submit`
+- `DELETE /api/v1/organizations/templates/drafts/:draftId`
 
 ### Messaging
 
 - `POST /api/v1/organizations/messages/template-send`
 - `GET /api/v1/organizations/messages/:messageId`
+- `POST /api/v1/organizations/conversations/:conversationId/reply`
+  - supports text and agent-uploaded media replies
 
 ### Inbox
 
@@ -373,6 +406,7 @@ Keep existing routes and harden them.
 ### Subscribers
 
 - `GET /api/v1/organizations/subscribers`
+- `POST /api/v1/organizations/subscribers/import`
 - `GET /api/v1/organizations/subscribers/:subscriberId`
 - `PATCH /api/v1/organizations/subscribers/:subscriberId`
 - `PATCH /api/v1/organizations/subscribers/:subscriberId/tags`
@@ -387,7 +421,8 @@ Keep existing routes and harden them.
 
 Behavior:
 - create stores a draft broadcast
-- start can run immediately or accept a future `scheduledAt`
+- start can run immediately or accept `scheduledAt` or `scheduledLocal + timezone`
+- components may contain dynamic per-recipient value resolvers for subscriber fields and metadata
 - detail returns paginated recipients and delivery outcomes
 
 ## Worker Flows
@@ -408,8 +443,10 @@ Worker:
 3. upsert subscriber
 4. create/update conversation
 5. persist `Message`
-6. update delivery states if status event
-7. mark webhook event processed
+6. download inbound media from Meta when required and upload to durable storage
+7. update delivery states if status event
+8. process template-status and phone-quality events
+9. mark webhook event processed
 
 ### Template sync flow
 
@@ -417,6 +454,7 @@ Worker:
 2. upsert `WhatsAppTemplate` records
 3. mark missing templates archived if necessary
 4. update `metaConfig.lastTemplateSyncAt`
+5. keep `TemplateDraft` review state aligned with Meta template status
 
 ### Template send flow
 
@@ -431,10 +469,18 @@ Worker:
 
 1. create broadcast record
 2. snapshot audience
-3. create recipient jobs
-4. worker sends per recipient
-5. update usage counters and plan-governed limits
-6. roll up stats to `Broadcast`
+3. resolve per-recipient template variables
+4. create recipient jobs
+5. worker sends per recipient
+6. update usage counters and plan-governed limits
+7. roll up stats to `Broadcast`
+
+### Integration health flow
+
+1. sync WABA phone-level quality and messaging tier state
+2. update org-level `activeAlerts`
+3. expose warnings to UI and broadcast creation/start flows
+4. repeat automatically on a daily schedule
 
 ## Billing Model
 
