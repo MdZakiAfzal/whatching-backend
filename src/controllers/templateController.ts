@@ -6,6 +6,7 @@ import TemplateDraft from '../models/TemplateDraft';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
 import { logIntegrationAction } from '../services/integrationLogService';
+import { submitTemplateEditToMeta } from '../services/templateService';
 
 // POST /sync
 export const syncTemplates = catchAsync(async (req: any, res: Response, next: NextFunction) => {
@@ -385,4 +386,20 @@ export const deleteTemplate = catchAsync(async (req: any, res: Response, next: N
     });
     throw error;
   }
+});
+
+
+export const editWhatsAppTemplate = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { templateId } = req.params;
+  const { components } = req.body;
+  const orgId = req.org._id;
+
+  // Delegate the heavy lifting to the service layer
+  const updatedTemplate = await submitTemplateEditToMeta(templateId, orgId, components);
+
+  res.status(200).json({
+    status: 'success',
+    message: 'Template edit submitted. Status is now PENDING.',
+    data: { template: updatedTemplate },
+  });
 });

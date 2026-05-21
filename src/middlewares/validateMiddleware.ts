@@ -7,9 +7,9 @@ export const validate = (schema: z.ZodSchema) =>
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await schema.parseAsync({
-        body: req.body,
-        query: req.query,
-        params: req.params,
+        body: req.body || {}, // Fallback to prevent "received undefined" crashes
+        query: req.query || {},
+        params: req.params || {},
       });
       return next();
     } catch (error) {

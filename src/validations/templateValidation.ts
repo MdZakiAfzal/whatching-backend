@@ -52,3 +52,12 @@ export const submitTemplateDraftSchema = z.object({
     draftId: z.string().trim().regex(/^[a-f\d]{24}$/i, 'A valid draft ID is required'),
   }),
 });
+
+export const editTemplateSchema = z.object({
+  params: z.object({
+    templateId: z.string().trim().regex(/^[a-f\d]{24}$/i, 'A valid ID is required'),
+  }),
+  body: z.object({
+    components: z.array(z.record(z.string(), z.unknown())).min(1, 'At least one component is required for the edit'),
+  }),
+});

@@ -9,6 +9,7 @@ import {
   subscriberParamsSchema,
   updateSubscriberSchema,
   updateSubscriberTagsSchema,
+  bulkDeleteSubscribersSchema
 } from '../validations/inboxValidation';
 
 const router = express.Router();
@@ -21,6 +22,12 @@ router.post(
   restrictTo('owner', 'admin'),
   validate(importSubscribersSchema),
   subscriberController.importSubscribers
+);
+router.post(
+  '/bulk-delete',
+  restrictTo('owner', 'admin'),
+  validate(bulkDeleteSubscribersSchema),
+  subscriberController.bulkDeleteSubscribers
 );
 router.get('/', restrictTo('owner', 'admin', 'agent'), subscriberController.listSubscribers);
 router.get(

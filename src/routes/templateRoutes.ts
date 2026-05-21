@@ -4,6 +4,7 @@ import { protect } from '../middlewares/authMiddleware';
 import { setOrgContext } from '../middlewares/orgMiddleware';
 import { restrictTo } from '../middlewares/roleMiddleware';
 import { validate } from '../middlewares/validateMiddleware';
+
 import {
   createTemplateDraftSchema,
   createTemplateSchema,
@@ -11,6 +12,7 @@ import {
   templateDraftParamsSchema,
   templateParamsSchema,
   updateTemplateDraftSchema,
+  editTemplateSchema
 } from '../validations/templateValidation';
 
 const router = express.Router();
@@ -55,6 +57,12 @@ router.delete(
 router.post('/', restrictTo('owner', 'admin'), validate(createTemplateSchema), templateController.createTemplate);
 router.post('/sync', restrictTo('owner', 'admin'), templateController.syncTemplates);
 router.get('/:templateId', validate(templateParamsSchema), templateController.getTemplate);
+router.patch(
+  '/:templateId',
+  restrictTo('owner', 'admin'),
+  validate(editTemplateSchema),
+  templateController.editWhatsAppTemplate
+);
 router.delete('/:templateId', restrictTo('owner', 'admin'), validate(templateParamsSchema), templateController.deleteTemplate);
 
 export default router;

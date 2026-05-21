@@ -3,6 +3,7 @@ import { decrypt } from '../utils/encryption';
 import WhatsAppTemplate from '../models/WhatsAppTemplate';
 import AppError from '../utils/AppError';
 import TemplateDraft from '../models/TemplateDraft';
+import Organization from '../models/Organization';
 
 const GRAPH_API_VERSION = 'v20.0';
 
@@ -378,4 +379,74 @@ export const deleteTemplateInMeta = async (org: any, template: any) => {
   });
 
   await WhatsAppTemplate.deleteOne({ _id: template._id });
+};
+
+export const submitTemplateEditToMeta = async (templateId: string, orgId: string, components: any[]) => {
+  // 1. Find the local template reference
+  const template = await WhatsAppTemplate.findOne({ _id: templateId, orgId });
+
+  if (!template) {
+    throw new AppError('Template not found.', 404);
+  }
+
+  // Ensure we use the correct field based on your schema (templateId)
+  if (!template.templateId) {
+    throw new AppError('Cannot edit a draft that has not been synced to Meta.', 400);
+  }
+
+  // 2. Fetch Organization credentials. 
+  // We MUST use the '+' prefix because accessToken is hidden (select: false) by default!
+  const organization = await Organization.findById(orgId).select('+metaConfig.accessToken');
+  const accessToken = organization?.metaConfig?.accessToken;
+
+  if (!accessToken) {
+    throw new AppError('WhatsApp integration is missing or unverified.', 400);
+  }
+
+  // 3. DECRYPT the token before sending it to Meta!
+  const decryptedToken = decrypt(accessToken);
+
+  // 4. Fire the Edit Request to Meta's Graph API
+  try {
+    const metaResponse = await axios({
+      method: 'POST',
+      url: `https://graph.facebook.com/v20.0/${template.templateId}`, // Using v20.0 as per your service
+      headers: {
+        Authorization: `Bearer ${decryptedToken}`,
+        'Content-Type': 'application/json',
+      },
+      data: {
+        name: template.name,
+        language: template.language,
+        components,
+      },
+    });
+  } catch (error: any) {
+    const metaError = error?.response?.data?.error;
+    
+    // Log the full nested object to your terminal for backend debugging
+    console.error('Meta Template Edit Error Details:', JSON.stringify(metaError, null, 2));
+
+    // Bubble up the highly specific user message or details to Postman
+    const detailedMessage = metaError?.error_user_msg 
+      || metaError?.error_data?.details 
+      || metaError?.message 
+      || 'Failed to edit template on Meta.';
+
+    throw new AppError(`Meta API Rejected: ${detailedMessage}`, 400);
+  }
+
+  // 5. Downgrade the local status to PENDING and save the new components
+  const updatedTemplate = await WhatsAppTemplate.findByIdAndUpdate(
+    templateId,
+    {
+      $set: {
+        components,
+        status: 'PENDING',
+      },
+    },
+    { new: true, runValidators: true }
+  );
+
+  return updatedTemplate;
 };

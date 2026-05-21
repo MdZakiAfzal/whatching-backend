@@ -4,6 +4,7 @@ import Subscriber from '../models/Subscriber';
 import Conversation from '../models/Conversation';
 import Organization from '../models/Organization';
 import catchAsync from '../utils/catchAsync';
+import Message from '../models/Message';
 import AppError from '../utils/AppError';
 import { normalizePhoneNumber } from '../utils/phoneNumber';
 import { PlanManager } from '../utils/planManager';
@@ -365,5 +366,41 @@ export const importSubscribers = catchAsync(async (req: any, res: Response, next
         currentSubscriberCount: latestSubscriberCount,
       },
     },
+  });
+});
+
+
+export const bulkDeleteSubscribers = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { subscriberIds } = req.body;
+  const orgId = req.org._id;
+
+  // 1. Verify ownership (only isolate IDs that actually belong to this org)
+  const validSubscribers = await Subscriber.find({
+    _id: { $in: subscriberIds },
+    orgId: orgId
+  }).select('_id');
+
+  const validIds = validSubscribers.map(sub => sub._id);
+
+  if (validIds.length === 0) {
+    return next(new AppError('No valid subscribers found to delete.', 404));
+  }
+
+  // 2. Cascade wipe all data using the bulk array
+  await Promise.all([
+    Subscriber.deleteMany({ _id: { $in: validIds } }),
+    Conversation.deleteMany({ orgId, subscriberId: { $in: validIds } }),
+    Message.deleteMany({ orgId, subscriberId: { $in: validIds } })
+  ]);
+
+  // 3. Decrement the organization's billing tracker accurately
+  await Organization.findByIdAndUpdate(orgId, {
+    $inc: { 'usage.subscribersCount': -validIds.length },
+  });
+
+  res.status(200).json({
+    status: 'success',
+    message: `Successfully deleted ${validIds.length} subscribers.`,
+    data: { deletedCount: validIds.length }
   });
 });

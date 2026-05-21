@@ -54,8 +54,9 @@ export const updateSubscriberSchema = z.object({
     subscriberId: objectIdSchema,
   }),
   body: z.object({
-    firstName: z.string().trim().min(1).optional(),
-    lastName: z.string().trim().min(1).optional(),
+    // Allow an empty string, or fallback to undefined if missing
+    firstName: z.string().trim().optional().or(z.literal('')),
+    lastName: z.string().trim().optional().or(z.literal('')),
     isOptedIn: z.boolean().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
   }),
@@ -72,8 +73,9 @@ export const updateSubscriberTagsSchema = z.object({
 
 const importSubscriberRowSchema = z.object({
   phoneNumber: z.string().trim().min(6, 'A valid WhatsApp number is required'),
-  firstName: z.string().trim().min(1).optional(),
-  lastName: z.string().trim().min(1).optional(),
+  // Allow empty strings during bulk import
+  firstName: z.string().trim().optional().or(z.literal('')),
+  lastName: z.string().trim().optional().or(z.literal('')),
   tags: z.array(z.string().trim().min(1)).max(50).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   isOptedIn: z.boolean().optional(),
@@ -88,4 +90,10 @@ export const importSubscribersSchema = z.object({
     }),
     z.array(importSubscriberRowSchema).min(1).max(10000),
   ]),
+});
+
+export const bulkDeleteSubscribersSchema = z.object({
+  body: z.object({
+    subscriberIds: z.array(objectIdSchema).min(1).max(1000, 'Cannot delete more than 1000 subscribers at once'),
+  }),
 });
