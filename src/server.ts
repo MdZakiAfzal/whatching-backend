@@ -15,6 +15,7 @@ import messageRoutes from './routes/messageRoutes';
 import conversationRoutes from './routes/conversationRoutes';
 import subscriberRoutes from './routes/subscriberRoutes';
 import broadcastRoutes from './routes/broadcastRoutes';
+import mediaRoutes from './routes/mediaRoutes';
 
 const bootstrap = async () => {
   const app = express();
@@ -53,6 +54,7 @@ const bootstrap = async () => {
   app.use('/api/v1/organizations/conversations', conversationRoutes);
   app.use('/api/v1/organizations/subscribers', subscriberRoutes);
   app.use('/api/v1/organizations/broadcasts', broadcastRoutes);
+  app.use('/api/v1/organizations/media', mediaRoutes);
   app.use('/api/v1/templates', templateRoutes);
   app.use('/api/v1/messages', messageRoutes);
 

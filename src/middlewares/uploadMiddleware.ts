@@ -29,3 +29,25 @@ export const optionalSingleAttachmentUpload = (fieldName: string) => {
     });
   };
 };
+
+export const multipleAttachmentUpload = (fieldName: string, maxCount: number = 10) => {
+  const middleware = upload.array(fieldName, maxCount);
+
+  return (req: any, res: any, next: any) => {
+    if (!req.is('multipart/form-data')) {
+      return next();
+    }
+
+    middleware(req, res, (error: any) => {
+      if (!error) {
+        return next();
+      }
+
+      if (error instanceof multer.MulterError) {
+        return next(new AppError(error.message, 400));
+      }
+
+      next(error);
+    });
+  };
+};

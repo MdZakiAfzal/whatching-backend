@@ -3,6 +3,7 @@ import path from 'path';
 import { decrypt } from '../utils/encryption';
 import { uploadBufferToCloudinary } from './cloudinaryService';
 import { config } from '../config';
+import AppError from '../utils/AppError';
 
 const GRAPH_API_VERSION = 'v20.0';
 
@@ -159,4 +160,41 @@ export const uploadAgentReplyAttachment = async ({
     mimeType,
     originalFilename: originalName,
   };
+};
+
+export const createMetaUploadSession = async (appId: string, accessToken: string, fileLength: number, fileType: string): Promise<string> => {
+  try {
+    const response = await axios({
+      method: 'POST',
+      url: `https://graph.facebook.com/${GRAPH_API_VERSION}/${appId}/uploads`,
+      params: { file_length: fileLength, file_type: fileType },
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    return response.data.id; // Returns the Session ID (e.g., "upload:12345...")
+  } catch (error: any) {
+    console.error('Meta Upload Session Error:', error?.response?.data || error.message);
+    throw new AppError(`Failed to create Meta upload session: ${error?.response?.data?.error?.message || 'Unknown error'}`, 400);
+  }
+};
+
+/**
+ * Meta Upload Step B: Upload Bytes for Template Media
+ */
+export const uploadBytesToMeta = async (sessionId: string, accessToken: string, fileBuffer: Buffer): Promise<string> => {
+  try {
+    const response = await axios({
+      method: 'POST',
+      url: `https://graph.facebook.com/${GRAPH_API_VERSION}/${sessionId}`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        file_offset: 0,
+        'Content-Type': 'application/octet-stream',
+      },
+      data: fileBuffer,
+    });
+    return response.data.h; // Returns the strict Meta handle ("4::aW1hZ...")
+  } catch (error: any) {
+    console.error('Meta Upload Bytes Error:', error?.response?.data || error.message);
+    throw new AppError(`Failed to upload bytes to Meta: ${error?.response?.data?.error?.message || 'Unknown error'}`, 400);
+  }
 };
