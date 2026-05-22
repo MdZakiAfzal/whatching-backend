@@ -8,8 +8,10 @@ import {
   importSubscribersSchema,
   subscriberParamsSchema,
   updateSubscriberSchema,
-  updateSubscriberTagsSchema,
-  bulkDeleteSubscribersSchema
+  bulkDeleteSubscribersSchema,
+  // 👉 Make sure to update your validation file to export these two new schemas!
+  attachTagsSchema, 
+  detachTagSchema
 } from '../validations/inboxValidation';
 
 const router = express.Router();
@@ -23,30 +25,43 @@ router.post(
   validate(importSubscribersSchema),
   subscriberController.importSubscribers
 );
+
 router.post(
   '/bulk-delete',
   restrictTo('owner', 'admin'),
   validate(bulkDeleteSubscribersSchema),
   subscriberController.bulkDeleteSubscribers
 );
+
 router.get('/', restrictTo('owner', 'admin', 'agent'), subscriberController.listSubscribers);
+
 router.get(
   '/:subscriberId',
   restrictTo('owner', 'admin', 'agent'),
   validate(subscriberParamsSchema),
   subscriberController.getSubscriber
 );
+
 router.patch(
   '/:subscriberId',
   restrictTo('owner', 'admin', 'agent'),
   validate(updateSubscriberSchema),
   subscriberController.updateSubscriber
 );
-router.patch(
+
+// 👉 NEW: Dedicated Tagging Engine Routes
+router.post(
   '/:subscriberId/tags',
   restrictTo('owner', 'admin', 'agent'),
-  validate(updateSubscriberTagsSchema),
-  subscriberController.updateSubscriberTags
+  validate(attachTagsSchema),
+  subscriberController.attachTagsToSubscriber
+);
+
+router.delete(
+  '/:subscriberId/tags/:tag',
+  restrictTo('owner', 'admin', 'agent'),
+  validate(detachTagSchema),
+  subscriberController.detachTagFromSubscriber
 );
 
 export default router;

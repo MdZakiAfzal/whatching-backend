@@ -97,3 +97,25 @@ export const bulkDeleteSubscribersSchema = z.object({
     subscriberIds: z.array(objectIdSchema).min(1).max(1000, 'Cannot delete more than 1000 subscribers at once'),
   }),
 });
+
+export const attachTagsSchema = z.object({
+  params: z.object({
+    subscriberId: z.string().regex(/^[a-f\d]{24}$/i, 'Invalid Subscriber ID'),
+  }),
+  body: z.object({
+    // Accepts either a single string {"tags": "VIP"} or an array {"tags": ["VIP", "New"]}
+    tags: z.union([
+      z.string().trim().min(1, 'Tag cannot be empty'),
+      z.array(z.string().trim().min(1, 'Tag cannot be empty')).min(1, 'At least one tag is required')
+    ], {
+      message: 'Please provide a valid tag string or an array of tags.' // 👉 FIX: Swapped errorMap for message
+    }),
+  }),
+});
+
+export const detachTagSchema = z.object({
+  params: z.object({
+    subscriberId: z.string().regex(/^[a-f\d]{24}$/i, 'Invalid Subscriber ID'),
+    tag: z.string().trim().min(1, 'Tag parameter is required'),
+  }),
+});

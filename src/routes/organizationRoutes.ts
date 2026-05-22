@@ -11,6 +11,7 @@ import {
   connectMetaSchema,
   setupOrganizationSchema,
   updateOrganizationSettingsSchema,
+  addTagSchema, deleteTagSchema,
 } from '../validations/organizationValidation';
 
 const router = express.Router();
@@ -41,5 +42,9 @@ router.post('/billing/subscribe', restrictTo('owner'), paymentController.startSu
 router.post('/billing/sync', restrictTo('owner'), paymentController.syncMySubscription);
 router.post('/billing/topup-wallet', restrictTo('owner'), paymentController.topupWallet);
 router.post('/billing/cancel', restrictTo('owner'), paymentController.cancelMySubscription);
+
+router.get('/tags', orgController.getOrganizationTags);
+router.post('/tags', restrictTo('owner', 'admin'), validate(addTagSchema), orgController.addOrganizationTag);
+router.delete('/tags/:tag', restrictTo('owner', 'admin'), validate(deleteTagSchema), orgController.deleteOrganizationTag);
 
 export default router;

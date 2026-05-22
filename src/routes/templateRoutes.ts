@@ -12,7 +12,8 @@ import {
   templateDraftParamsSchema,
   templateParamsSchema,
   updateTemplateDraftSchema,
-  editTemplateSchema
+  editTemplateSchema,
+  linkTemplateMediaSchema
 } from '../validations/templateValidation';
 
 const router = express.Router();
@@ -64,5 +65,11 @@ router.patch(
   templateController.editWhatsAppTemplate
 );
 router.delete('/:templateId', restrictTo('owner', 'admin'), validate(templateParamsSchema), templateController.deleteTemplate);
+router.patch(
+  '/:templateId/link-media',
+  restrictTo('owner', 'admin'),
+  validate(linkTemplateMediaSchema),
+  templateController.linkTemplateMedia
+);
 
 export default router;

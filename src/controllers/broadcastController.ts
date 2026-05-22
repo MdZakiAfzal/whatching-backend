@@ -8,6 +8,7 @@ import Organization from '../models/Organization';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
 import { PlanManager } from '../utils/planManager';
+import Media from '../models/Media';
 import {
   buildBroadcastAudienceFilter,
   countBroadcastAudience,
@@ -112,6 +113,39 @@ export const createBroadcast = catchAsync(async (req: any, res: Response, next: 
     messagingLimitTier: org.metaConfig?.messagingLimitTier,
   });
 
+  // 👉 1. Clone the components sent by the frontend (usually body variables)
+  let broadcastComponents = Array.isArray(req.body.components) ? [...req.body.components] : [];
+
+  // 👉 STRICT Auto-Inject Media URL Logic using the root defaultMediaId
+  const templateHeader = template.components?.find((c: any) => c.type === 'HEADER');
+
+  if (templateHeader && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(templateHeader.format)) {
+    const userProvidedHeader = broadcastComponents.find((c: any) => String(c.type).toLowerCase() === 'header');
+
+    // If the user didn't manually override the header in the broadcast payload
+    if (!userProvidedHeader) {
+      if (template.defaultMediaId) {
+        const media = await Media.findOne({ _id: template.defaultMediaId, orgId: req.org._id });
+
+        if (media && media.cloudinaryUrl) {
+          const mediaType = templateHeader.format.toLowerCase();
+          
+          broadcastComponents.push({
+            type: 'header',
+            parameters: [{
+              type: mediaType,
+              [mediaType]: { link: media.cloudinaryUrl },
+            }],
+          });
+        } else {
+          return next(new AppError(`This template requires a media header, but no default media is linked (likely the template was synced directly from Meta). Please assign a media file for this template.`, 400));
+        }
+      } else {
+        return next(new AppError(`This template requires a media header, but no default media is linked (likely the template was synced directly from Meta). Please assign a media file for this template.`, 400));
+      }
+    }
+  }
+
   const broadcast = (await Broadcast.create({
     orgId: req.org._id,
     createdBy: req.user._id,
@@ -123,7 +157,7 @@ export const createBroadcast = catchAsync(async (req: any, res: Response, next: 
       category: template.category,
     },
     payload: {
-      components: Array.isArray(req.body.components) ? req.body.components : [],
+      components: broadcastComponents,
     },
     audience,
   })) as any;

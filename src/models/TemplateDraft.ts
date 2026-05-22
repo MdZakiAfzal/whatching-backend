@@ -20,6 +20,7 @@ export interface ITemplateDraft extends Document {
   metaTemplateId?: string;
   rejectionReason?: string;
   lastSubmittedAt?: Date;
+  defaultMediaId?: mongoose.Types.ObjectId | null;
 }
 
 const TemplateDraftSchema: Schema = new Schema(
@@ -40,6 +41,11 @@ const TemplateDraftSchema: Schema = new Schema(
     metaTemplateId: { type: String, trim: true },
     rejectionReason: String,
     lastSubmittedAt: Date,
+    defaultMediaId: { 
+      type: Schema.Types.ObjectId, 
+      ref: 'Media',
+      default: null
+    },
   },
   { timestamps: true }
 );

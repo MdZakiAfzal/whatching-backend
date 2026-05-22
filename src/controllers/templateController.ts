@@ -7,6 +7,7 @@ import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
 import { logIntegrationAction } from '../services/integrationLogService';
 import { submitTemplateEditToMeta } from '../services/templateService';
+import Media from '../models/Media';
 
 // POST /sync
 export const syncTemplates = catchAsync(async (req: any, res: Response, next: NextFunction) => {
@@ -401,5 +402,45 @@ export const editWhatsAppTemplate = catchAsync(async (req: any, res: Response, n
     status: 'success',
     message: 'Template edit submitted. Status is now PENDING.',
     data: { template: updatedTemplate },
+  });
+});
+
+export const linkTemplateMedia = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { templateId } = req.params;
+  const { mediaId } = req.body;
+  const orgId = req.org._id;
+
+  // 1. Verify the media exists in their Asset Library
+  const media = await Media.findOne({ _id: mediaId, orgId });
+  if (!media) {
+    return next(new AppError('The selected media file could not be found in your Asset Library.', 404));
+  }
+
+  // 2. Find the synced template
+  const template = await WhatsAppTemplate.findOne({ templateId, orgId });
+  if (!template) {
+    return next(new AppError('Template not found for this organization.', 404));
+  }
+
+  // 3. Verify the template actually requires a media header
+  const templateHeader = template.components?.find((c: any) => c.type === 'HEADER');
+  if (!templateHeader || !['IMAGE', 'VIDEO', 'DOCUMENT'].includes(templateHeader.format)) {
+    return next(new AppError('This template does not require a media header.', 400));
+  }
+
+  // 4. Strict Type Checking (Prevent linking a video to an image template)
+  const requiredFormat = templateHeader.format.toLowerCase();
+  if (requiredFormat !== media.fileType.toLowerCase()) {
+    return next(new AppError(`Mismatch: This template requires a ${requiredFormat}, but you selected a ${media.fileType}.`, 400));
+  }
+
+  // 5. Update the internal field (No Meta API call needed!)
+  template.defaultMediaId = media._id;
+  await template.save();
+
+  res.status(200).json({
+    status: 'success',
+    message: 'Default media successfully linked to the template.',
+    data: { template }
   });
 });

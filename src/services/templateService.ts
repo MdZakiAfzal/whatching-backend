@@ -4,6 +4,7 @@ import WhatsAppTemplate from '../models/WhatsAppTemplate';
 import AppError from '../utils/AppError';
 import TemplateDraft from '../models/TemplateDraft';
 import Organization from '../models/Organization';
+import Media from '../models/Media';
 
 const GRAPH_API_VERSION = 'v20.0';
 
@@ -187,16 +188,17 @@ export const createTemplateInMeta = async (
   if (!wabaId || !accessToken) {
     throw new AppError('Meta integration is incomplete. Missing WABA ID or access token.', 400);
   }
-
+  const { metaComponents, extractedMediaId } = await resolveMediaForMeta(org._id, payload.components);
+  let metaResponse;
   try {
     // 1. Wrap the Axios call in a try/catch
-    await axios.post(
+    metaResponse = await axios.post(
       `https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/message_templates`,
       {
         name: payload.name,
         language: payload.language,
         category: normalizeTemplateCategory(payload.category),
-        components: payload.components,
+        components: metaComponents,
         allow_category_change: payload.allowCategoryChange,
       },
       {
@@ -220,11 +222,16 @@ export const createTemplateInMeta = async (
 
   await syncTemplatesFromMeta(org);
 
-  const template = await WhatsAppTemplate.findOne({
-    orgId: org._id,
-    name: payload.name,
-    language: payload.language,
-  }).sort('-updatedAt');
+  const template = await WhatsAppTemplate.findOneAndUpdate(
+    {
+      orgId: org._id,
+      templateId: metaResponse.data.id, // Grab the ID directly from Meta's response
+    },
+    {
+      $set: { defaultMediaId: extractedMediaId } // Injects our internal root attribute
+    },
+    { new: true }
+  );
 
   if (!template) {
     throw new AppError('Template was created in Meta but could not be found locally after sync.', 502);
@@ -383,7 +390,7 @@ export const deleteTemplateInMeta = async (org: any, template: any) => {
 
 export const submitTemplateEditToMeta = async (templateId: string, orgId: string, components: any[]) => {
   // 1. Find the local template reference
-  const template = await WhatsAppTemplate.findOne({ _id: templateId, orgId });
+  const template = await WhatsAppTemplate.findOne({ templateId, orgId });
 
   if (!template) {
     throw new AppError('Template not found.', 404);
@@ -406,6 +413,8 @@ export const submitTemplateEditToMeta = async (templateId: string, orgId: string
   // 3. DECRYPT the token before sending it to Meta!
   const decryptedToken = decrypt(accessToken);
 
+  const { metaComponents, extractedMediaId } = await resolveMediaForMeta(orgId, components);
+
   // 4. Fire the Edit Request to Meta's Graph API
   try {
     const metaResponse = await axios({
@@ -418,7 +427,7 @@ export const submitTemplateEditToMeta = async (templateId: string, orgId: string
       data: {
         name: template.name,
         language: template.language,
-        components,
+        components: metaComponents,
       },
     });
   } catch (error: any) {
@@ -441,12 +450,36 @@ export const submitTemplateEditToMeta = async (templateId: string, orgId: string
     templateId,
     {
       $set: {
-        components,
+        components: metaComponents,
         status: 'PENDING',
+        defaultMediaId: extractedMediaId
       },
     },
     { new: true, runValidators: true }
   );
 
   return updatedTemplate;
+};
+
+const resolveMediaForMeta = async (orgId: string, components: any[]) => {
+  const metaComponents = JSON.parse(JSON.stringify(components));
+  let extractedMediaId = null;
+
+  for (const component of metaComponents) {
+    if (component.type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(component.format)) {
+      if (component.mediaId) {
+        extractedMediaId = component.mediaId; // Capture it for the root level
+        
+        const media = await Media.findOne({ _id: component.mediaId, orgId });
+        if (!media) throw new AppError('Attached media not found.', 404);
+        if (!media.metaHandle) throw new AppError('Media is still syncing with Meta.', 400);
+
+        // Prep for Meta
+        component.example = { header_handle: [media.metaHandle] };
+        delete component.mediaId; // Strip it from the array
+      }
+    }
+  }
+
+  return { metaComponents, extractedMediaId };
 };

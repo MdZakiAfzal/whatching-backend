@@ -55,9 +55,19 @@ export const submitTemplateDraftSchema = z.object({
 
 export const editTemplateSchema = z.object({
   params: z.object({
-    templateId: z.string().trim().regex(/^[a-f\d]{24}$/i, 'A valid ID is required'),
+    // Standardize to expect the Meta ID, matching templateParamsSchema
+    templateId: z.string().trim().min(1, 'Template ID is required'),
   }),
   body: z.object({
-    components: z.array(z.record(z.string(), z.unknown())).min(1, 'At least one component is required for the edit'),
+    components: z.array(componentSchema).min(1, 'At least one component is required for the edit'),
+  }),
+});
+
+export const linkTemplateMediaSchema = z.object({
+  params: z.object({
+    templateId: z.string().trim().min(1, 'Template ID is required'),
+  }),
+  body: z.object({
+    mediaId: z.string().trim().regex(/^[a-f\d]{24}$/i, 'A valid Media ID is required'),
   }),
 });

@@ -9,6 +9,7 @@ import * as whatsappService from '../services/whatsappService';
 import { logIntegrationAction } from '../services/integrationLogService';
 import { getMessagingBillingState } from '../utils/messagingBilling';
 import { syncOrganizationMessagingHealth } from '../services/metaOperationalService';
+import Subscriber from '../models/Subscriber';
 
 const getMetaAccessTokenFromBody = (body: Record<string, unknown>) => {
   const accessToken = typeof body.accessToken === 'string' ? body.accessToken.trim() : '';
@@ -308,5 +309,72 @@ export const updateOrganizationSettings = catchAsync(async (req: any, res: Respo
     data: {
       organization: serializeOrganization(organization),
     },
+  });
+});
+
+
+export const addOrganizationTag = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { tag } = req.body;
+  const normalizedTag = tag.trim();
+
+  // $addToSet ensures we don't add duplicate tags
+  const organization = await Organization.findByIdAndUpdate(
+    req.org._id,
+    { $addToSet: { tags: normalizedTag } },
+    { new: true, runValidators: true }
+  );
+
+  res.status(201).json({ 
+    status: 'success', 
+    data: { tags: organization?.tags } 
+  });
+});
+
+export const getOrganizationTags = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  // Fetch only the tags array to keep the payload incredibly lightweight
+  const organization = await Organization.findById(req.org._id).select('tags');
+
+  if (!organization) {
+    return next(new AppError('Organization not found.', 404));
+  }
+
+  res.status(200).json({
+    status: 'success',
+    data: { 
+      tags: organization.tags 
+    }
+  });
+});
+
+export const deleteOrganizationTag = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { tag } = req.params;
+  const decodedTag = decodeURIComponent(tag).trim();
+
+  // 1. Remove from organization master list
+  const organization = await Organization.findByIdAndUpdate(
+    req.org._id,
+    { $pull: { tags: decodedTag } },
+    { new: true }
+  );
+
+  if (!organization) return next(new AppError('Organization not found.', 404));
+
+  // 👉 2. BACKGROUND CLEANUP: Strip tag, then catch any resulting orphans
+  Subscriber.updateMany(
+    { orgId: req.org._id, tags: decodedTag },
+    { $pull: { tags: decodedTag } }
+  )
+    .then(() => {
+      // Find anyone whose tags array just dropped to size 0, and give them the fallback
+      return Subscriber.updateMany(
+        { orgId: req.org._id, tags: { $size: 0 } },
+        { $push: { tags: 'General' } }
+      );
+    })
+    .catch(err => console.error('Failed to cleanup tags from subscribers:', err));
+
+  res.status(200).json({ 
+    status: 'success', 
+    data: { tags: organization.tags } 
   });
 });

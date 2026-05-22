@@ -50,6 +50,7 @@ export interface IOrganization extends Document {
   };
   razorpaySubscriptionId?: string; 
   razorpayCustomerId?: string;
+  tags: string[];
 }
 
 const OrganizationSchema: Schema = new Schema(
@@ -124,6 +125,10 @@ const OrganizationSchema: Schema = new Schema(
     },
     razorpaySubscriptionId: { type: String, sparse: true },
     razorpayCustomerId: { type: String, sparse: true },
+    tags: {
+      type: [String],
+      default: ['General','New', 'VIP', 'Regular Customer']
+    },
   },
   { timestamps: true }
 );

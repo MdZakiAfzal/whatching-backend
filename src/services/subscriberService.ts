@@ -44,6 +44,7 @@ export const upsertSubscriber = async (
     phoneNumber: normalizedPhoneNumber,
     waId: options.waId,
     firstName: profileName || 'WhatsApp User',
+    tags: ['General'],
     isOptedIn: true,
     optInSource: options.optInSource || (options.direction === 'inbound' ? 'whatsapp_inbound' : 'manual'),
     lastInteraction: interactionTime,

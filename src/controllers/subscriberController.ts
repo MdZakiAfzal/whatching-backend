@@ -143,6 +143,10 @@ export const getSubscriber = catchAsync(async (req: any, res: Response, next: Ne
 });
 
 export const updateSubscriber = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  // 👉 STRIP TAGS: Force the frontend to use our safe attach/detach routes below
+  if (req.body.tags !== undefined) {
+    delete req.body.tags;
+  }
   const subscriber = await Subscriber.findOneAndUpdate(
     {
       _id: req.params.subscriberId,
@@ -168,13 +172,26 @@ export const updateSubscriber = catchAsync(async (req: any, res: Response, next:
 });
 
 export const updateSubscriberTags = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const requestedTags = req.body.tags;
+
+  // 1. Fetch the master tag list for this business
+  const org = await Organization.findById(req.org._id).select('tags');
+  const validTags = new Set(org?.tags || []);
+
+  // 2. Validate that every requested tag exists in the master list
+  const invalidTags = requestedTags.filter((tag: string) => !validTags.has(tag));
+
+  if (invalidTags.length > 0) {
+    return next(new AppError(`The following tags are unauthorized: ${invalidTags.join(', ')}. Please add them in Organization Settings first.`, 400));
+  }
+
   const subscriber = await Subscriber.findOneAndUpdate(
     {
       _id: req.params.subscriberId,
       orgId: req.org._id,
     },
     {
-      $set: { tags: req.body.tags },
+      $set: { tags: requestedTags },
     },
     {
       returnDocument: 'after',
@@ -182,14 +199,9 @@ export const updateSubscriberTags = catchAsync(async (req: any, res: Response, n
     }
   );
 
-  if (!subscriber) {
-    return next(new AppError('Subscriber not found for this organization.', 404));
-  }
+  if (!subscriber) return next(new AppError('Subscriber not found for this organization.', 404));
 
-  res.status(200).json({
-    status: 'success',
-    data: { subscriber },
-  });
+  res.status(200).json({ status: 'success', data: { subscriber } });
 });
 
 export const importSubscribers = catchAsync(async (req: any, res: Response, next: NextFunction) => {
@@ -294,6 +306,21 @@ export const importSubscribers = catchAsync(async (req: any, res: Response, next
     });
   }
 
+  // 👉 NEW: Extract all unique tags from the CSV and auto-merge them into the Master List
+  const allImportedTags = new Set<string>();
+  normalizedRows.forEach(row => {
+    if (Array.isArray(row.tags)) {
+      row.tags.forEach(tag => allImportedTags.add(tag));
+    }
+  });
+
+  if (allImportedTags.size > 0) {
+    // $addToSet with $each safely merges only the new tags into the org's existing array
+    await Organization.findByIdAndUpdate(req.org._id, {
+      $addToSet: { tags: { $each: Array.from(allImportedTags) } }
+    });
+  }
+
   const now = new Date();
   const orgObjectId = new mongoose.Types.ObjectId(String(req.org._id));
   const existingOperations = normalizedRows
@@ -330,7 +357,7 @@ export const importSubscribers = catchAsync(async (req: any, res: Response, next
           $set: {
             ...(row.firstName ? { firstName: row.firstName } : {}),
             ...(row.lastName ? { lastName: row.lastName } : {}),
-            tags: row.tags || [],
+            tags: row.tags && row.tags.length > 0 ? row.tags : ['General'],
             metadata: row.metadata || {},
             isOptedIn: typeof row.isOptedIn === 'boolean' ? row.isOptedIn : true,
             optInSource: row.optInSource || 'bulk_import',
@@ -403,4 +430,51 @@ export const bulkDeleteSubscribers = catchAsync(async (req: any, res: Response, 
     message: `Successfully deleted ${validIds.length} subscribers.`,
     data: { deletedCount: validIds.length }
   });
+});
+
+export const attachTagsToSubscriber = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  // Accept either a single string or an array of tags
+  const requestedTags = Array.isArray(req.body.tags) ? req.body.tags : [req.body.tags];
+
+  // 1. Validate against the Organization Master List
+  const org = await Organization.findById(req.org._id).select('tags');
+  const validTags = new Set(org?.tags || []);
+  const invalidTags = requestedTags.filter((tag: string) => !validTags.has(tag));
+
+  if (invalidTags.length > 0) {
+    return next(new AppError(`The following tags are unauthorized: ${invalidTags.join(', ')}. Please add them in Organization Settings first.`, 400));
+  }
+
+  // 2. Safely Append using $addToSet and $each (Prevents duplicates and wipes)
+  const subscriber = await Subscriber.findOneAndUpdate(
+    { _id: req.params.subscriberId, orgId: req.org._id },
+    { $addToSet: { tags: { $each: requestedTags } } },
+    { new: true, runValidators: true }
+  );
+
+  if (!subscriber) return next(new AppError('Subscriber not found.', 404));
+
+  res.status(200).json({ status: 'success', data: { subscriber } });
+});
+
+export const detachTagFromSubscriber = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const { tag } = req.params;
+  const decodedTag = decodeURIComponent(tag).trim();
+
+  // 1. Safely Remove the tag using $pull
+  const subscriber = await Subscriber.findOneAndUpdate(
+    { _id: req.params.subscriberId, orgId: req.org._id },
+    { $pull: { tags: decodedTag } },
+    { new: true, runValidators: true }
+  );
+
+  if (!subscriber) return next(new AppError('Subscriber not found.', 404));
+
+  // 2. The "General" Fallback Check
+  if (subscriber.tags.length === 0) {
+    subscriber.tags.push('General');
+    await subscriber.save();
+  }
+
+  res.status(200).json({ status: 'success', data: { subscriber } });
 });

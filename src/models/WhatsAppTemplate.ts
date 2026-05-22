@@ -13,6 +13,7 @@ export interface IWhatsAppTemplate extends Document {
   qualityScore?: string;
   namespace?: string;
   lastSyncedAt: Date;
+  defaultMediaId?: mongoose.Types.ObjectId | null;
 }
 
 const WhatsAppTemplateSchema: Schema = new Schema({
@@ -27,7 +28,12 @@ const WhatsAppTemplateSchema: Schema = new Schema({
   rejectionReason: String,
   qualityScore: String,
   namespace: String,
-  lastSyncedAt: { type: Date, default: Date.now }
+  lastSyncedAt: { type: Date, default: Date.now },
+  defaultMediaId: { 
+    type: Schema.Types.ObjectId, 
+    ref: 'Media',
+    default: null
+  },
 }, { timestamps: true });
 
 // CRITICAL INDEXES for fast lookup and syncing

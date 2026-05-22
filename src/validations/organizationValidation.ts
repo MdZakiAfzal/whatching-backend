@@ -25,3 +25,15 @@ export const updateOrganizationSettingsSchema = z.object({
     timezone: z.string().trim().min(1, 'A valid IANA timezone is required'),
   }),
 });
+
+export const addTagSchema = z.object({
+  body: z.object({
+    tag: z.string().trim().min(1, 'Tag name is required').max(30, 'Tag name is too long'),
+  }),
+});
+
+export const deleteTagSchema = z.object({
+  params: z.object({
+    tag: z.string().trim().min(1, 'Tag name is required'),
+  }),
+});
