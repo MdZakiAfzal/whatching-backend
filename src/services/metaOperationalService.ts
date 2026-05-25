@@ -17,20 +17,21 @@ const normalizeTierLimit = (tier?: string | null) => {
 };
 
 const limitTierToCount = (tier?: string | null) => {
-  switch (normalizeTierLimit(tier)) {
-    case 'TIER_250':
-      return 250;
-    case 'TIER_1K':
-      return 1000;
-    case 'TIER_10K':
-      return 10000;
-    case 'TIER_100K':
-      return 100000;
-    case 'TIER_UNLIMITED':
-      return Number.MAX_SAFE_INTEGER;
-    default:
-      return null;
+  const normalized = normalizeTierLimit(tier);
+  if (!normalized) return null;
+
+  // 1. Handle "Unlimited" cases
+  if (normalized === 'UNLIMITED' || normalized === 'TIER_UNLIMITED') {
+    return Number.MAX_SAFE_INTEGER;
   }
+
+  // 2. Dynamically parse Meta's raw numerical strings (e.g., "250", "2000", "10000")
+  const numericValue = parseInt(normalized, 10);
+  if (!isNaN(numericValue) && numericValue > 0) {
+    return numericValue;
+  }
+
+  return null;
 };
 
 const upsertAlert = (
