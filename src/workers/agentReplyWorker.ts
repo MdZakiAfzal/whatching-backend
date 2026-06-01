@@ -6,6 +6,8 @@ import { QUEUE_NAMES } from '../queues/names';
 import { AgentReplyJobData } from '../queues/agentReplyQueue';
 import { createWorkerConnection } from '../queues/redis';
 import { decrypt } from '../utils/encryption';
+import Conversation from '../models/Conversation';
+import { publishConversationUpdated, publishMessageUpdated } from '../services/realtimeService';
 
 const buildReplyPayload = (data: AgentReplyJobData) => {
   const payload: Record<string, unknown> = {
@@ -66,7 +68,7 @@ const buildReplyPayload = (data: AgentReplyJobData) => {
 };
 
 const markReplySent = async (data: AgentReplyJobData, metaMessageId: string) => {
-  await Message.findByIdAndUpdate(data.messageId, {
+  const message = await Message.findByIdAndUpdate(data.messageId, {
     metaMessageId,
     status: 'sent',
     sentAt: new Date(),
@@ -82,11 +84,21 @@ const markReplySent = async (data: AgentReplyJobData, metaMessageId: string) => 
             mimeType: data.attachment.mimeType,
             filename: data.attachment.originalFilename,
             publicId: data.attachment.publicId,
-          }
+      }
         : {}),
       to: data.subscriberPhone,
     },
-  });
+  }, { returnDocument: 'after' });
+
+  if (message) {
+    await Conversation.findByIdAndUpdate(message.conversationId, {
+      $set: {
+        lastOutboundMetaMessageId: metaMessageId,
+      },
+    });
+    await publishMessageUpdated(String(message.orgId), String(message.conversationId), String(message._id));
+    await publishConversationUpdated(String(message.orgId), String(message.conversationId));
+  }
 };
 
 const markReplyFailed = async (
@@ -94,12 +106,17 @@ const markReplyFailed = async (
   description: string,
   errorCode?: string
 ) => {
-  await Message.findByIdAndUpdate(messageId, {
+  const message = await Message.findByIdAndUpdate(messageId, {
     status: 'failed',
     failedAt: new Date(),
     errorCode,
     errorMessage: description,
-  });
+  }, { returnDocument: 'after' });
+
+  if (message) {
+    await publishMessageUpdated(String(message.orgId), String(message.conversationId), String(message._id));
+    await publishConversationUpdated(String(message.orgId), String(message.conversationId));
+  }
 };
 
 const processAgentReplyJob = async (job: Job<AgentReplyJobData>) => {

@@ -27,6 +27,12 @@ router.get(
   conversationController.getConversationMessages
 );
 router.get(
+  '/:conversationId/context',
+  restrictTo('owner', 'admin', 'agent'),
+  validate(conversationParamsSchema),
+  conversationController.getConversationContext
+);
+router.get(
   '/:conversationId',
   restrictTo('owner', 'admin', 'agent'),
   validate(conversationParamsSchema),

@@ -81,6 +81,8 @@ export const setupOrganization = catchAsync(async (req: any, res: Response) => {
 // STAGE 2: Link Meta credentials after Embedded Signup
 export const connectMeta = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   const { wabaId, phoneNumberId } = req.body;
+  const coexistenceEnabledProvided = typeof req.body.coexistenceEnabled === 'boolean';
+  const coexistenceEnabled = coexistenceEnabledProvided ? req.body.coexistenceEnabled === true : undefined;
   const orgId = req.org._id;
   const rawAccessToken = getMetaAccessTokenFromBody(req.body);
 
@@ -115,6 +117,13 @@ export const connectMeta = catchAsync(async (req: any, res: Response, next: Next
         'metaConfig.lastHealthCheckAt': new Date(),
         'metaConfig.businessAccountName': resolvedConnection.businessAccountName,
         'metaConfig.displayPhoneNumber': resolvedConnection.displayPhoneNumber,
+        ...(coexistenceEnabledProvided
+          ? {
+              'metaConfig.coexistenceEnabled': coexistenceEnabled,
+              'metaConfig.coexistenceStatus': coexistenceEnabled ? 'enabled' : 'not_enabled',
+              'metaConfig.lastCoexistenceSyncAt': new Date(),
+            }
+          : {}),
       },
       { returnDocument: 'after', runValidators: true }
     );
@@ -185,6 +194,13 @@ export const getIntegrationStatus = catchAsync(async (req: any, res: Response) =
         qualityRating: org.metaConfig?.qualityRating || null,
         qualityStatus: org.metaConfig?.qualityStatus || null,
         activeAlerts: org.metaConfig?.activeAlerts || [],
+        coexistence: {
+          enabled: Boolean(org.metaConfig?.coexistenceEnabled),
+          status: org.metaConfig?.coexistenceStatus || 'not_enabled',
+          lastEvent: org.metaConfig?.lastCoexistenceEvent || null,
+          lastSyncedAt: org.metaConfig?.lastCoexistenceSyncAt || null,
+          disconnectionInfo: org.metaConfig?.coexistenceDisconnectionInfo || null,
+        },
         timezone: org.timezone || 'UTC',
         messagingBilling: getMessagingBillingState(org),
       }
@@ -243,6 +259,13 @@ export const syncMetaIntegration = catchAsync(async (req: any, res: Response) =>
           qualityRating: organization.metaConfig.qualityRating || null,
           qualityStatus: organization.metaConfig.qualityStatus || null,
           activeAlerts: organization.metaConfig.activeAlerts || [],
+          coexistence: {
+            enabled: Boolean(organization.metaConfig.coexistenceEnabled),
+            status: organization.metaConfig.coexistenceStatus || 'not_enabled',
+            lastEvent: organization.metaConfig.lastCoexistenceEvent || null,
+            lastSyncedAt: organization.metaConfig.lastCoexistenceSyncAt || null,
+            disconnectionInfo: organization.metaConfig.coexistenceDisconnectionInfo || null,
+          },
           timezone: organization.timezone || 'UTC',
           messagingBilling: getMessagingBillingState(organization),
         },

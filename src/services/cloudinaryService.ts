@@ -62,3 +62,16 @@ export const uploadBufferToCloudinary = async ({
     stream.end(buffer);
   });
 };
+
+export const deleteFromCloudinary = async ({
+  publicId,
+  resourceType = 'raw',
+}: {
+  publicId: string;
+  resourceType?: 'image' | 'video' | 'raw';
+}) => {
+  ensureCloudinaryConfigured();
+  return cloudinary.uploader.destroy(publicId, {
+    resource_type: resourceType,
+  });
+};

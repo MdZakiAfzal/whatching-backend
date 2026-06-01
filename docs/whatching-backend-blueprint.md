@@ -126,13 +126,13 @@ Demo path:
 7. usage tracking plus SaaS plan enforcement
 8. Meta messaging-tier warnings before large sends
 
-### Phase 4: Flows and Automation
+### Phase 4: Hybrid Bot + Live Inbox
 
-1. trigger rules
-2. message sequences
-3. webhook-based automation runs
-4. pause/resume/cancel
-5. analytics and run history
+1. deterministic interactive bot trees
+2. AI fallback with knowledge-base retrieval
+3. human takeover governance with rolling auto-timeout
+4. live inbox events for a WhatsApp-like chat UI
+5. bot builder and knowledge-source management
 
 ## Data Model Plan
 
@@ -180,6 +180,18 @@ Suggested additions:
 - `unreadCount`
 - `channel`
 - `priority`
+- `mode`
+- `activeFlowId`
+- `activeTriggerKey`
+- `lastBotMessageId`
+- `handoffRequestedAt`
+- `handoffReason`
+- `manualTakeoverAt`
+- `manualTakeoverBy`
+- `lastAgentReplyAt`
+- `automationPausedUntil`
+- `lastInboundMetaMessageId`
+- `lastOutboundMetaMessageId`
 
 ### New models to add
 
@@ -324,6 +336,68 @@ Fields:
 - `status`
 - `error`
 
+#### BotFlow
+
+Purpose:
+- Published bot blocks for deterministic WhatsApp routing
+
+Core fields:
+- `orgId`
+- `status`
+- `triggerKey`
+- `name`
+- `blockType`
+- `content`
+- `actions[]`
+- `sortOrder`
+- `version`
+
+#### BotSettings
+
+Purpose:
+- Org-level bot configuration for greetings, AI, and timeout behavior
+
+Core fields:
+- `orgId`
+- `isBotEnabled`
+- `isAiEnabled`
+- `systemPrompt`
+- `defaultTriggerKey`
+- `greetingKeywords[]`
+- `escalationTriggerIds[]`
+- `autoTimeoutMinutes`
+- `geminiModel`
+
+#### KnowledgeSource
+
+Purpose:
+- Raw text/FAQ/file inputs for bot AI grounding
+
+Core fields:
+- `orgId`
+- `type`
+- `status`
+- `title`
+- `content`
+- `faqEntries`
+- `filename`
+- `mimeType`
+- `cloudinaryUrl`
+- `chunkCount`
+- `lastIngestedAt`
+
+#### KnowledgeChunk
+
+Purpose:
+- Searchable chunks derived from `KnowledgeSource`
+
+Core fields:
+- `orgId`
+- `sourceId`
+- `order`
+- `content`
+- `normalizedContent`
+
 ## Queue Design
 
 ### Required queues
@@ -335,6 +409,8 @@ Fields:
 - `broadcasts:fanout`
 - `billing:reconcile`
 - `integration:health-check`
+- `bot:knowledge-ingest`
+- `bot:conversation-timeout`
 
 ### Job payload shape
 
@@ -398,10 +474,15 @@ Keep existing routes and harden them.
 - `GET /api/v1/organizations/conversations`
 - `GET /api/v1/organizations/conversations/:conversationId`
 - `GET /api/v1/organizations/conversations/:conversationId/messages`
+- `GET /api/v1/organizations/conversations/:conversationId/context`
 - `PATCH /api/v1/organizations/conversations/:conversationId/assign`
 - `PATCH /api/v1/organizations/conversations/:conversationId/status`
 - `PATCH /api/v1/organizations/conversations/:conversationId/read`
 - `POST /api/v1/organizations/conversations/:conversationId/reply`
+
+### Chat
+
+- `GET /api/v1/organizations/chat/bootstrap`
 
 ### Subscribers
 
@@ -424,6 +505,23 @@ Behavior:
 - start can run immediately or accept `scheduledAt` or `scheduledLocal + timezone`
 - components may contain dynamic per-recipient value resolvers for subscriber fields and metadata
 - detail returns paginated recipients and delivery outcomes
+
+### Bot
+
+- `GET /api/v1/organizations/bot/settings`
+- `PATCH /api/v1/organizations/bot/settings`
+- `GET /api/v1/organizations/bot/flows`
+- `POST /api/v1/organizations/bot/flows`
+- `GET /api/v1/organizations/bot/flows/:flowId`
+- `PATCH /api/v1/organizations/bot/flows/:flowId`
+- `POST /api/v1/organizations/bot/flows/:flowId/publish`
+- `POST /api/v1/organizations/bot/flows/:flowId/archive`
+- `GET /api/v1/organizations/bot/knowledge-sources`
+- `POST /api/v1/organizations/bot/knowledge-sources/text`
+- `POST /api/v1/organizations/bot/knowledge-sources/upload`
+- `DELETE /api/v1/organizations/bot/knowledge-sources/:sourceId`
+- `POST /api/v1/organizations/bot/knowledge-sources/:sourceId/reingest`
+- `GET /api/v1/organizations/bot/status`
 
 ## Worker Flows
 
@@ -474,6 +572,18 @@ Worker:
 5. worker sends per recipient
 6. update usage counters and plan-governed limits
 7. roll up stats to `Broadcast`
+
+### Bot orchestration flow
+
+1. webhook worker persists inbound message and emits live inbox updates
+2. if the conversation is in active manual mode, stop after persistence
+3. if the conversation is pending escalation, stop after persistence
+4. if inbound is a button or list reply, route through the active published flow
+5. if inbound text matches greeting keywords, send `DEFAULT`
+6. otherwise retrieve KB chunks and run Gemini fallback
+7. if AI requests human help, mark conversation pending and emit escalation
+8. if an agent replies manually, switch to `agent_manual` and refresh timeout
+9. when timeout expires, resume bot mode and resolve the thread
 
 ### Integration health flow
 

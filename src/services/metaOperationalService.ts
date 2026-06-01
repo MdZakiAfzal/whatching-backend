@@ -195,3 +195,112 @@ export const applyPhoneNumberQualityWebhook = async ({
     activeAlerts: organization.metaConfig.activeAlerts || [],
   };
 };
+
+export const applyCoexistenceAccountUpdateWebhook = async ({
+  organization,
+  event,
+  disconnectionInfo,
+}: {
+  organization: any;
+  event?: string | null;
+  disconnectionInfo?: { reason?: string; initiated_by?: string } | null;
+}) => {
+  const normalizedEvent = event ? String(event).trim().toUpperCase() : '';
+  const now = new Date();
+  let alerts = Array.isArray(organization.metaConfig?.activeAlerts)
+    ? organization.metaConfig.activeAlerts.map((alert: any) => ({ ...alert }))
+    : [];
+
+  organization.metaConfig.lastCoexistenceEvent = normalizedEvent || organization.metaConfig.lastCoexistenceEvent;
+  organization.metaConfig.lastCoexistenceSyncAt = now;
+  organization.metaConfig.lastHealthCheckAt = now;
+
+  if (normalizedEvent === 'PARTNER_REMOVED') {
+    organization.metaConfig.coexistenceEnabled = false;
+    organization.metaConfig.coexistenceStatus = 'disconnected';
+    organization.metaConfig.status = 'disconnected';
+    organization.metaConfig.coexistenceDisconnectionInfo = {
+      reason: disconnectionInfo?.reason ? String(disconnectionInfo.reason).trim() : undefined,
+      initiatedBy: disconnectionInfo?.initiated_by
+        ? String(disconnectionInfo.initiated_by).trim().toUpperCase()
+        : undefined,
+      disconnectedAt: now,
+    };
+
+    alerts = upsertAlert(alerts, {
+      code: 'COEXISTENCE_DISCONNECTED',
+      severity: 'critical',
+      message: 'WhatsApp Business app disconnected from Cloud API coexistence.',
+      active: true,
+    });
+  } else {
+    organization.metaConfig.coexistenceEnabled = true;
+    organization.metaConfig.coexistenceStatus = 'enabled';
+    if (organization.metaConfig.status === 'disconnected') {
+      organization.metaConfig.status = 'ready';
+    }
+
+    alerts = upsertAlert(alerts, {
+      code: 'COEXISTENCE_DISCONNECTED',
+      severity: 'critical',
+      message: 'WhatsApp Business app disconnected from Cloud API coexistence.',
+      active: false,
+    });
+  }
+
+  organization.metaConfig.activeAlerts = alerts;
+  await organization.save({ validateBeforeSave: false });
+
+  return {
+    coexistenceEnabled: organization.metaConfig.coexistenceEnabled,
+    coexistenceStatus: organization.metaConfig.coexistenceStatus,
+    lastCoexistenceEvent: organization.metaConfig.lastCoexistenceEvent,
+    coexistenceDisconnectionInfo: organization.metaConfig.coexistenceDisconnectionInfo || null,
+  };
+};
+
+export const applyCoexistenceUnsupportedWebhook = async ({
+  organization,
+  errorCode,
+  errorTitle,
+  errorMessage,
+}: {
+  organization: any;
+  errorCode?: string | number;
+  errorTitle?: string;
+  errorMessage?: string;
+}) => {
+  const code = errorCode ? String(errorCode).trim() : '';
+  if (code !== '131060') {
+    return null;
+  }
+
+  const now = new Date();
+  let alerts = Array.isArray(organization.metaConfig?.activeAlerts)
+    ? organization.metaConfig.activeAlerts.map((alert: any) => ({ ...alert }))
+    : [];
+
+  organization.metaConfig.coexistenceEnabled = true;
+  organization.metaConfig.coexistenceStatus = 'limited';
+  organization.metaConfig.lastCoexistenceEvent = 'UNSUPPORTED_MESSAGE_131060';
+  organization.metaConfig.lastCoexistenceSyncAt = now;
+  organization.metaConfig.lastHealthCheckAt = now;
+
+  alerts = upsertAlert(alerts, {
+    code: 'COEXISTENCE_UNSUPPORTED_MESSAGE',
+    severity: 'warning',
+    message:
+      errorTitle ||
+      errorMessage ||
+      'Received unsupported coexistence message (131060). Ask the business user to review the WhatsApp Business app.',
+    active: true,
+  });
+
+  organization.metaConfig.activeAlerts = alerts;
+  await organization.save({ validateBeforeSave: false });
+
+  return {
+    coexistenceStatus: organization.metaConfig.coexistenceStatus,
+    activeAlerts: organization.metaConfig.activeAlerts || [],
+  };
+};

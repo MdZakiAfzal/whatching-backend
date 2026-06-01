@@ -2,12 +2,13 @@ import { Job, Worker } from 'bullmq';
 import axios from 'axios';
 import Organization from '../models/Organization';
 import Message from '../models/Message';
-import { getOrCreateActiveConversation } from '../services/conversationService';
 import { logIntegrationAction } from '../services/integrationLogService';
 import { QUEUE_NAMES } from '../queues/names';
 import { TemplateSendJobData } from '../queues/templateSendQueue';
 import { createWorkerConnection } from '../queues/redis';
 import { decrypt } from '../utils/encryption';
+import Conversation from '../models/Conversation';
+import { publishConversationUpdated, publishMessageUpdated } from '../services/realtimeService';
 
 const markMessageSent = async (
   messageId: string,
@@ -15,7 +16,7 @@ const markMessageSent = async (
   templateName: string,
   subscriberPhone: string
 ) => {
-  await Message.findByIdAndUpdate(messageId, {
+  const message = await Message.findByIdAndUpdate(messageId, {
     metaMessageId,
     status: 'sent',
     sentAt: new Date(),
@@ -23,7 +24,17 @@ const markMessageSent = async (
     errorMessage: undefined,
     failedAt: undefined,
     payload: { text: `[Template: ${templateName}]`, to: subscriberPhone },
-  });
+  }, { returnDocument: 'after' });
+
+  if (message) {
+    await Conversation.findByIdAndUpdate(message.conversationId, {
+      $set: {
+        lastOutboundMetaMessageId: metaMessageId,
+      },
+    });
+    await publishMessageUpdated(String(message.orgId), String(message.conversationId), String(message._id));
+    await publishConversationUpdated(String(message.orgId), String(message.conversationId));
+  }
 };
 
 const markMessageFailed = async (
@@ -31,12 +42,17 @@ const markMessageFailed = async (
   description: string,
   errorCode?: string
 ) => {
-  await Message.findByIdAndUpdate(messageId, {
+  const message = await Message.findByIdAndUpdate(messageId, {
     status: 'failed',
     failedAt: new Date(),
     errorCode,
     errorMessage: description,
-  });
+  }, { returnDocument: 'after' });
+
+  if (message) {
+    await publishMessageUpdated(String(message.orgId), String(message.conversationId), String(message._id));
+    await publishConversationUpdated(String(message.orgId), String(message.conversationId));
+  }
 };
 
 const processTemplateSendJob = async (job: Job<TemplateSendJobData>) => {
@@ -79,11 +95,6 @@ const processTemplateSendJob = async (job: Job<TemplateSendJobData>) => {
     const metaMessageId = response.data.messages?.[0]?.id;
 
     if (metaMessageId) {
-      await getOrCreateActiveConversation(
-        data.orgId as any,
-        data.subscriberId as any,
-        `[Template Sent: ${data.templateName}]`
-      );
       await markMessageSent(data.messageId, metaMessageId, data.templateName, data.subscriberPhone);
       console.log(`🚀 OUTBOUND: Template '${data.templateName}' sent to ${data.subscriberPhone}`);
       return;

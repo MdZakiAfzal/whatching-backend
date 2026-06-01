@@ -30,6 +30,7 @@ import {
   resolveBroadcastComponentsForSubscriber,
   sanitizeMetaTemplateComponents,
 } from '../services/broadcastPersonalizationService';
+import { publishConversationUpdated, publishMessageCreated, publishMessageUpdated } from '../services/realtimeService';
 
 const BROADCAST_CHUNK_SIZE = 250;
 
@@ -366,6 +367,7 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
       conversationId: (conversation as any)._id,
       subscriberId: recipient.subscriberId,
       direction: 'outbound',
+      source: 'broadcast',
       type: 'template',
       templateId: broadcast.template.templateId,
       status: 'queued',
@@ -382,6 +384,9 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
         messageId,
       },
     });
+
+    await publishMessageCreated(String(recipient.orgId), String((conversation as any)._id), String(messageId));
+    await publishConversationUpdated(String(recipient.orgId), String((conversation as any)._id));
   }
 
   const payload = {
@@ -427,6 +432,9 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
       },
     });
 
+    await publishMessageUpdated(String(recipient.orgId), String((conversation as any)._id), String(messageId));
+    await publishConversationUpdated(String(recipient.orgId), String((conversation as any)._id));
+
     await transitionBroadcastRecipientStatus({
       filter: { _id: recipient._id, orgId: recipient.orgId },
       nextStatus: 'sent',
@@ -463,6 +471,9 @@ const processBroadcastRecipientJob = async (job: Job<BroadcastRecipientJobData>)
       errorCode: providerError?.code ? String(providerError.code) : undefined,
       errorMessage: failureMessage,
     });
+
+    await publishMessageUpdated(String(recipient.orgId), String((conversation as any)._id), String(messageId));
+    await publishConversationUpdated(String(recipient.orgId), String((conversation as any)._id));
 
     await transitionBroadcastRecipientStatus({
       filter: { _id: recipient._id, orgId: recipient.orgId },

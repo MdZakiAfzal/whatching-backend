@@ -5,6 +5,7 @@ import Organization from '../models/Organization';
 import Transaction from '../models/Transaction';
 import { config } from '../config';
 import catchAsync from '../utils/catchAsync';
+import { synchronizeAiTokenCycleWindow } from '../services/usageService';
 
 type RawBodyRequest = Request & { rawBody?: string };
 
@@ -24,6 +25,13 @@ const mapWebhookSubscriptionStatus = (status: string) => {
     default:
       return 'pending_payment';
   }
+};
+
+const timestampToDate = (value?: number | string | null) => {
+  if (!value) return undefined;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return undefined;
+  return new Date(numeric * 1000);
 };
 
 const applyWalletTopupOnce = async (orgId: string, amount: number, referenceId: string) => {
@@ -147,6 +155,13 @@ export const handleRazorpayWebhook = catchAsync(async (req: Request, res: Respon
         subscriptionStatus: 'active',
         razorpayCustomerId: subEntity.customer_id,
       });
+
+      await synchronizeAiTokenCycleWindow({
+        orgId,
+        cycleStartedAt: timestampToDate(subEntity.current_start) || new Date(),
+        cycleResetsAt: timestampToDate(subEntity.current_end),
+        resetUsage: false,
+      });
     }
 
     if (event === 'subscription.charged') {
@@ -171,6 +186,13 @@ export const handleRazorpayWebhook = catchAsync(async (req: Request, res: Respon
         subEntity.plan_id,
         subEntity.id
       );
+
+      await synchronizeAiTokenCycleWindow({
+        orgId,
+        cycleStartedAt: timestampToDate(subEntity.current_start) || new Date(),
+        cycleResetsAt: timestampToDate(subEntity.current_end),
+        resetUsage: true,
+      });
     }
 
     if (event === 'subscription.pending' || event === 'subscription.halted') {

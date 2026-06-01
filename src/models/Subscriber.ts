@@ -10,6 +10,8 @@ export interface ISubscriber extends Document {
   metadata: Record<string, any>; // Flexible "Database" part for custom fields
   isOptedIn: boolean;
   optInSource?: string;
+  optedOutAt?: Date;
+  optOutSource?: string;
   lastInteraction: Date;
   lastInboundAt?: Date;
   lastOutboundAt?: Date;
@@ -25,6 +27,8 @@ const SubscriberSchema: Schema = new Schema({
   metadata: { type: Map, of: Schema.Types.Mixed }, // Supports dynamic "Gym" or "Salon" data
   isOptedIn: { type: Boolean, default: true },
   optInSource: { type: String, trim: true },
+  optedOutAt: Date,
+  optOutSource: { type: String, trim: true },
   lastInteraction: { type: Date, default: Date.now },
   lastInboundAt: Date,
   lastOutboundAt: Date,

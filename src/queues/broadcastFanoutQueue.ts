@@ -39,8 +39,8 @@ export const broadcastFanoutQueue = new Queue<
   },
 });
 
-const getBroadcastStartJobId = (broadcastId: string) => `broadcast:start:${broadcastId}`;
-const getBroadcastRecipientJobId = (recipientId: string) => `broadcast:recipient:${recipientId}`;
+const getBroadcastStartJobId = (broadcastId: string) => `broadcast_start_${broadcastId}`;
+const getBroadcastRecipientJobId = (recipientId: string) => `broadcast_recipient_${recipientId}`;
 
 export const enqueueBroadcastStartJob = async (
   data: BroadcastStartJobData,

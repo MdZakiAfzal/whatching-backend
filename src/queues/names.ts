@@ -5,4 +5,6 @@ export const QUEUE_NAMES = {
   agentReplyProcess: 'messages_agent-reply',
   broadcastFanoutProcess: 'broadcasts_fanout',
   integrationHealthSyncProcess: 'integration_health-sync',
+  knowledgeIngestProcess: 'bot_knowledge-ingest',
+  conversationTimeoutProcess: 'bot_conversation-timeout',
 } as const;

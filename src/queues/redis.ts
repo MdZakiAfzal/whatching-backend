@@ -12,3 +12,6 @@ export const queueConnection = buildRedisConnection('whatching-queue');
 
 export const createWorkerConnection = (connectionName: string) =>
   buildRedisConnection(connectionName);
+
+export const createRedisPubSubConnection = (connectionName: string) =>
+  buildRedisConnection(connectionName);

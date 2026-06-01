@@ -34,7 +34,7 @@ export const enqueueOrganizationHealthSyncJob = async (data: IntegrationHealthJo
   }
 
   await integrationHealthQueue.add(INTEGRATION_HEALTH_JOB_NAMES.syncOrgHealth, data, {
-    jobId: `integration:sync:${data.orgId}`,
+    jobId: `integration_sync_${data.orgId}`,
   });
 };
 

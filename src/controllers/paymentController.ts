@@ -6,6 +6,7 @@ import * as paymentService from '../services/paymentService';
 import { RazorpaySubscription } from '../services/paymentService';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
+import { synchronizeAiTokenCycleWindow } from '../services/usageService';
 
 const OPEN_CHECKOUT_STATUSES = new Set(['created', 'authenticated']);
 const BLOCKED_CHECKOUT_STATUSES = new Set(['pending', 'halted']);
@@ -42,6 +43,22 @@ const syncOrganizationSubscription = async (organization: any) => {
   }
 
   await organization.save({ validateBeforeSave: false });
+
+  if (remoteSubscription.status === 'active') {
+    const cycleStartedAt = remoteSubscription.current_start
+      ? new Date(remoteSubscription.current_start * 1000)
+      : new Date();
+    const cycleResetsAt = remoteSubscription.current_end
+      ? new Date(remoteSubscription.current_end * 1000)
+      : undefined;
+
+    await synchronizeAiTokenCycleWindow({
+      orgId: organization._id,
+      cycleStartedAt,
+      cycleResetsAt,
+      resetUsage: false,
+    });
+  }
 
   return { organization, remoteSubscription };
 };

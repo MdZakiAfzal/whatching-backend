@@ -24,6 +24,8 @@ export interface RazorpaySubscription {
   short_url?: string;
   customer_id?: string;
   paid_count?: number;
+  current_start?: number;
+  current_end?: number;
 }
 
 export const createSubscription = async (orgId: string, tier: 'basic' | 'pro') => {

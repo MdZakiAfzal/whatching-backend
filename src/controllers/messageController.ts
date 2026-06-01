@@ -1,7 +1,6 @@
 import { Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { PlanManager } from '../utils/planManager';
-import Organization from '../models/Organization';
 import WhatsAppTemplate from '../models/WhatsAppTemplate';
 import { enqueueTemplateSendJob } from '../queues/templateSendQueue';
 import { enqueueAgentReplyJob, AgentReplyMessageType } from '../queues/agentReplyQueue';
@@ -17,6 +16,16 @@ import { getMessagingBillingState } from '../utils/messagingBilling';
 import { trackMessagingUsage } from '../services/usageService';
 import { uploadAgentReplyAttachment } from '../services/mediaService';
 import { sanitizeMetaTemplateComponents } from '../services/broadcastPersonalizationService';
+import { serializeMessage } from '../services/chatSerializationService';
+import {
+  publishAgentTakeoverEvent,
+  publishConversationUpdated,
+  publishMessageCreated,
+  publishMessageUpdated,
+} from '../services/realtimeService';
+import { scheduleConversationTimeoutJob } from '../queues/conversationTimeoutQueue';
+import BotSettings from '../models/BotSettings';
+import { createSystemConversationMessage } from '../services/botMessagingService';
 
 type UploadedAttachment = {
   buffer: Buffer;
@@ -126,6 +135,8 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
     conversationId: (conversation as any)._id,
     subscriberId: subscriber._id,
     direction: 'outbound',
+    source: 'agent',
+    senderUserId: req.user._id,
     type: 'template',
     templateId: template.templateId,
     status: 'queued',
@@ -178,6 +189,8 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
   }
 
   await trackMessagingUsage(org._id, 'templateMessagesSent');
+  await publishMessageCreated(String(org._id), String((conversation as any)._id), String(messageId));
+  await publishConversationUpdated(String(org._id), String((conversation as any)._id));
 
   await logIntegrationAction({
     orgId: org._id,
@@ -198,7 +211,7 @@ export const sendTemplateMessage = catchAsync(async (req: any, res: Response, ne
     status: 'success',
     message: 'Message queued for delivery successfully.',
     data: {
-      messageId: String(messageId),
+      message: serializeMessage(await Message.findById(messageId)),
       queueStatus: 'queued',
       billingMode: getMessagingBillingState(org).mode,
     }
@@ -211,7 +224,8 @@ export const getMessage = catchAsync(async (req: any, res: Response, next: NextF
     orgId: req.org._id,
   })
     .populate('subscriberId', 'phoneNumber firstName lastName')
-    .populate('conversationId', 'status assignedTo lastMessage updatedAt');
+    .populate('conversationId', 'status assignedTo lastMessage updatedAt')
+    .populate('senderUserId', 'name email phoneNumber');
 
   if (!message) {
     return next(new AppError('Message not found for this organization.', 404));
@@ -219,7 +233,7 @@ export const getMessage = catchAsync(async (req: any, res: Response, next: NextF
 
   res.status(200).json({
     status: 'success',
-    data: { message },
+    data: { message: serializeMessage(message) },
   });
 });
 
@@ -294,6 +308,9 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
 
   const messageId = new mongoose.Types.ObjectId();
   const traceId = `reply_${String(org._id)}_${String(messageId)}`;
+  const timeoutMinutes =
+    (await BotSettings.findOne({ orgId: org._id }).select('autoTimeoutMinutes'))?.autoTimeoutMinutes || 60;
+  const isFirstTakeover = conversation.mode !== 'agent_manual';
   const previewText = buildReplyPreviewText({
     messageType,
     text,
@@ -302,6 +319,7 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
   });
 
   const session = await mongoose.startSession();
+  const now = new Date();
   try {
     await session.withTransaction(async () => {
       await Message.create([{
@@ -310,6 +328,8 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
         conversationId: conversation._id,
         subscriberId: subscriber._id,
         direction: 'outbound',
+        source: 'agent',
+        senderUserId: req.user._id,
         type: messageType,
         status: 'queued',
         payload: {
@@ -331,9 +351,14 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
         {
           $set: {
             lastMessage: previewText,
-            lastMessageAt: new Date(),
-            lastOutboundAt: new Date(),
+            lastMessageAt: now,
+            lastOutboundAt: now,
             status: 'pending',
+            mode: 'agent_manual',
+            manualTakeoverAt: conversation.manualTakeoverAt || now,
+            manualTakeoverBy: req.user._id,
+            lastAgentReplyAt: now,
+            automationPausedUntil: new Date(now.getTime() + timeoutMinutes * 60 * 1000),
           },
         },
         { session }
@@ -343,8 +368,8 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
         subscriber._id,
         {
           $set: {
-            lastInteraction: new Date(),
-            lastOutboundAt: new Date(),
+            lastInteraction: now,
+            lastOutboundAt: now,
           },
         },
         { session }
@@ -409,12 +434,36 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
   });
 
   await trackMessagingUsage(org._id, 'sessionMessagesSent');
+  await scheduleConversationTimeoutJob(
+    {
+      orgId: String(org._id),
+      conversationId: String(conversation._id),
+      traceId,
+      createdAt: new Date().toISOString(),
+    },
+    timeoutMinutes * 60 * 1000
+  );
+  if (isFirstTakeover) {
+    await createSystemConversationMessage({
+      organization: org,
+      conversation,
+      subscriber,
+      previewText: `${req.user.name || 'An agent'} joined the conversation.`,
+      systemEventType: 'agent_takeover_started',
+      payload: {
+        actorUserId: String(req.user._id),
+      },
+    });
+  }
+  await publishMessageCreated(String(org._id), String(conversation._id), String(messageId));
+  await publishConversationUpdated(String(org._id), String(conversation._id));
+  await publishAgentTakeoverEvent(String(org._id), String(conversation._id));
 
   res.status(202).json({
     status: 'success',
     message: 'Reply queued for delivery successfully.',
     data: {
-      messageId: String(messageId),
+      message: serializeMessage(await Message.findById(messageId)),
       conversationId: String(conversation._id),
       messageType,
     },

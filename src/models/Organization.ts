@@ -33,6 +33,15 @@ export interface IOrganization extends Document {
       createdAt?: Date;
       lastTriggeredAt?: Date;
     }>;
+    coexistenceEnabled?: boolean;
+    coexistenceStatus?: 'not_enabled' | 'enabled' | 'disconnected' | 'limited';
+    lastCoexistenceEvent?: string;
+    lastCoexistenceSyncAt?: Date;
+    coexistenceDisconnectionInfo?: {
+      reason?: string;
+      initiatedBy?: string;
+      disconnectedAt?: Date;
+    };
   };
   messagingBilling: {
     mode: MessagingBillingMode;
@@ -43,6 +52,8 @@ export interface IOrganization extends Document {
   walletBalance: number;
   usage: {
     aiTokensUsed: number;
+    aiTokensCycleStartedAt?: Date;
+    aiTokensCycleResetsAt?: Date;
     subscribersCount: number;
     templateMessagesSent: number;
     sessionMessagesSent: number;
@@ -96,6 +107,19 @@ const OrganizationSchema: Schema = new Schema(
           lastTriggeredAt: Date,
         },
       ],
+      coexistenceEnabled: { type: Boolean, default: false },
+      coexistenceStatus: {
+        type: String,
+        enum: ['not_enabled', 'enabled', 'disconnected', 'limited'],
+        default: 'not_enabled',
+      },
+      lastCoexistenceEvent: { type: String, trim: true },
+      lastCoexistenceSyncAt: Date,
+      coexistenceDisconnectionInfo: {
+        reason: { type: String, trim: true },
+        initiatedBy: { type: String, trim: true },
+        disconnectedAt: Date,
+      },
     },
     messagingBilling: {
       mode: {
@@ -118,6 +142,8 @@ const OrganizationSchema: Schema = new Schema(
     walletBalance: { type: Number, default: 0 }, // Legacy internal balance. Not used for Meta messaging charges.
     usage: {
       aiTokensUsed: { type: Number, default: 0 },
+      aiTokensCycleStartedAt: Date,
+      aiTokensCycleResetsAt: Date,
       subscribersCount: { type: Number, default: 0 },
       templateMessagesSent: { type: Number, default: 0 },
       sessionMessagesSent: { type: Number, default: 0 },

@@ -2,6 +2,7 @@ import { Job, Worker } from 'bullmq';
 import mongoose from 'mongoose';
 import WebhookEvent from '../models/WebhookEvent';
 import Message from '../models/Message';
+import Conversation from '../models/Conversation';
 import { upsertSubscriber } from '../services/subscriberService';
 import { getOrCreateActiveConversation } from '../services/conversationService';
 import { QUEUE_NAMES } from '../queues/names';
@@ -11,12 +12,34 @@ import Organization from '../models/Organization';
 import { syncBroadcastRecipientFromMessageStatus } from '../services/broadcastService';
 import { persistInboundMetaMedia } from '../services/mediaService';
 import { applyTemplateStatusWebhook } from '../services/templateService';
-import { applyPhoneNumberQualityWebhook } from '../services/metaOperationalService';
+import {
+  applyCoexistenceAccountUpdateWebhook,
+  applyCoexistenceUnsupportedWebhook,
+  applyPhoneNumberQualityWebhook,
+} from '../services/metaOperationalService';
+import { routeIncomingMessage } from '../services/botOrchestrator';
+import {
+  publishConversationUpdated,
+  publishMessageCreated,
+  publishMessageUpdated,
+} from '../services/realtimeService';
 
 const extractMessageType = (message: any) => {
   const normalizedType = String(message?.type || '').toLowerCase();
-  if (['text', 'image', 'audio', 'document', 'video', 'template'].includes(normalizedType)) {
-    return normalizedType as 'text' | 'image' | 'audio' | 'document' | 'video' | 'template';
+  if (
+    ['text', 'image', 'audio', 'document', 'video', 'template', 'interactive', 'location'].includes(
+      normalizedType
+    )
+  ) {
+    return normalizedType as
+      | 'text'
+      | 'image'
+      | 'audio'
+      | 'document'
+      | 'video'
+      | 'template'
+      | 'interactive'
+      | 'location';
   }
 
   return 'unknown' as const;
@@ -31,9 +54,38 @@ const getMessageAsset = (message: any) => {
   return message[normalizedType];
 };
 
+const normalizePhone = (value?: string | null) =>
+  String(value || '')
+    .replace(/[^\d]/g, '')
+    .trim();
+
+const isBusinessOriginMessage = (organization: any, message: any) => {
+  const sender = normalizePhone(message?.from);
+  const displayNumber = normalizePhone(organization?.metaConfig?.displayPhoneNumber);
+  return Boolean(sender && displayNumber && sender === displayNumber);
+};
+
 const buildInboundMessagePreview = (message: any) => {
   if (message.type === 'text') {
     return message.text?.body || '';
+  }
+
+  if (message.type === 'interactive') {
+    const buttonReply = message.interactive?.button_reply;
+    if (buttonReply?.title) {
+      return buttonReply.title;
+    }
+
+    const listReply = message.interactive?.list_reply;
+    if (listReply?.title) {
+      return listReply.title;
+    }
+
+    return '[Interactive response]';
+  }
+
+  if (message.type === 'location') {
+    return `[Shared Location${message.location?.name ? `: ${message.location.name}` : ''}]`;
   }
 
   const asset = getMessageAsset(message);
@@ -64,6 +116,30 @@ const resolveInboundMessagePayload = (message: any) => {
     };
   }
 
+  if (message.type === 'interactive') {
+    const buttonReply = message.interactive?.button_reply;
+    const listReply = message.interactive?.list_reply;
+    return {
+      text: preview,
+      interactiveType: buttonReply ? 'button_reply' : listReply ? 'list_reply' : 'interactive',
+      interactiveReplyId: buttonReply?.id || listReply?.id,
+      interactiveReplyTitle: buttonReply?.title || listReply?.title,
+      interactiveReplyDescription: listReply?.description,
+    };
+  }
+
+  if (message.type === 'location') {
+    return {
+      text: preview,
+      location: {
+        latitude: message.location?.latitude,
+        longitude: message.location?.longitude,
+        name: message.location?.name,
+        address: message.location?.address,
+      },
+    };
+  }
+
   return {
     text: preview,
     ...(asset?.id ? { mediaId: asset.id } : {}),
@@ -73,6 +149,27 @@ const resolveInboundMessagePayload = (message: any) => {
     ...(asset?.sha256 ? { sha256: asset.sha256 } : {}),
     storageStatus: asset?.id ? 'pending' : undefined,
   };
+};
+
+const resolveBusinessEchoRecipient = (value: any, message: any) => {
+  const directTo = typeof message?.to === 'string' ? message.to : '';
+  if (directTo) {
+    return directTo;
+  }
+
+  const matchedContact =
+    value?.contacts?.find((contact: any) => String(contact?.wa_id || contact?.input) !== String(message?.from)) ||
+    value?.contacts?.[0];
+
+  if (matchedContact?.wa_id) {
+    return String(matchedContact.wa_id);
+  }
+
+  if (matchedContact?.input) {
+    return String(matchedContact.input);
+  }
+
+  return null;
 };
 
 const resolveOrganizationForChange = async ({
@@ -159,6 +256,8 @@ const updateMessageStatus = async (
     errorCode: statusPayload.errors?.[0]?.code ? String(statusPayload.errors[0].code) : undefined,
     errorMessage: statusPayload.errors?.[0]?.title || statusPayload.errors?.[0]?.message,
   });
+
+  await publishMessageUpdated(orgId, String(message.conversationId), String(message._id));
 };
 
 const processInboundMessage = async (organization: any, value: any, message: any) => {
@@ -171,21 +270,22 @@ const processInboundMessage = async (organization: any, value: any, message: any
   const existingMessage = await Message.findOne({
     orgId,
     metaMessageId: message.id,
-  }).select('_id payload type');
+  }).select('_id payload conversationId');
 
   const inboundPayload = resolveInboundMessagePayload(message);
   const normalizedType = extractMessageType(message);
 
   let subscriber = null;
   let conversation = null;
+  let createdMessage: any = null;
+
+  subscriber = await upsertSubscriber(orgId, phoneNumber, profileName, {
+    waId: matchedContact?.wa_id,
+    direction: 'inbound',
+    optInSource: 'whatsapp_inbound',
+  });
 
   if (!existingMessage) {
-    subscriber = await upsertSubscriber(orgId, phoneNumber, profileName, {
-      waId: matchedContact?.wa_id,
-      direction: 'inbound',
-      optInSource: 'whatsapp_inbound',
-    });
-
     conversation = await getOrCreateActiveConversation(
       orgId,
       subscriber._id as any,
@@ -193,22 +293,31 @@ const processInboundMessage = async (organization: any, value: any, message: any
       'inbound'
     );
 
-    await Message.create({
+    createdMessage = await Message.create({
       orgId,
       conversationId: (conversation as any)._id,
       subscriberId: subscriber._id,
       direction: 'inbound',
+      source: 'customer',
       type: normalizedType,
       metaMessageId: message.id,
       status: 'received',
       payload: inboundPayload,
       sentAt: message.timestamp ? new Date(parseInt(message.timestamp, 10) * 1000) : new Date(),
     });
+
+    await Conversation.findByIdAndUpdate(conversation._id, {
+      $set: {
+        lastInboundMetaMessageId: message.id,
+      },
+    });
+
+    await publishMessageCreated(String(orgId), String(conversation._id), String(createdMessage._id));
+    await publishConversationUpdated(String(orgId), String(conversation._id));
   } else {
-    subscriber = await upsertSubscriber(orgId, phoneNumber, profileName, {
-      waId: matchedContact?.wa_id,
-      direction: 'inbound',
-      optInSource: 'whatsapp_inbound',
+    conversation = await Conversation.findOne({
+      _id: existingMessage.conversationId,
+      orgId,
     });
   }
 
@@ -219,6 +328,8 @@ const processInboundMessage = async (organization: any, value: any, message: any
     mediaId &&
     organization.metaConfig?.accessToken &&
     normalizedType !== 'text' &&
+    normalizedType !== 'interactive' &&
+    normalizedType !== 'location' &&
     (!existingMessage || existingMessage.payload?.storageStatus !== 'stored')
   ) {
     try {
@@ -231,7 +342,7 @@ const processInboundMessage = async (organization: any, value: any, message: any
         originalFilename: mediaAsset?.filename,
       });
 
-      await Message.findOneAndUpdate(
+      const storedMessage = await Message.findOneAndUpdate(
         {
           orgId,
           metaMessageId: message.id,
@@ -244,10 +355,15 @@ const processInboundMessage = async (organization: any, value: any, message: any
               storageStatus: 'stored',
             },
           },
-        }
+        },
+        { returnDocument: 'after' }
       );
+
+      if (storedMessage) {
+        await publishMessageUpdated(String(orgId), String(storedMessage.conversationId), String(storedMessage._id));
+      }
     } catch (error: any) {
-      await Message.findOneAndUpdate(
+      const failedMessage = await Message.findOneAndUpdate(
         {
           orgId,
           metaMessageId: message.id,
@@ -260,13 +376,84 @@ const processInboundMessage = async (organization: any, value: any, message: any
               mediaDownloadError: error.message,
             },
           },
-        }
+        },
+        { returnDocument: 'after' }
       );
+      if (failedMessage) {
+        await publishMessageUpdated(String(orgId), String(failedMessage.conversationId), String(failedMessage._id));
+      }
       console.error(`⚠️ Failed to persist inbound media for org ${String(orgId)}:`, error.message);
     }
   }
 
+  if (!existingMessage && subscriber && conversation) {
+    await routeIncomingMessage({
+      organization,
+      conversation,
+      subscriber,
+      message,
+    });
+  }
+
   console.log(`✅ INBOX: Message from ${profileName || phoneNumber}: "${inboundPayload.text}"`);
+};
+
+const processBusinessEchoMessage = async (organization: any, value: any, message: any) => {
+  const orgId = organization._id;
+  const recipientPhone = resolveBusinessEchoRecipient(value, message);
+  if (!recipientPhone) {
+    return;
+  }
+
+  const existingMessage = await Message.findOne({
+    orgId,
+    metaMessageId: message.id,
+  }).select('_id');
+
+  if (existingMessage) {
+    return;
+  }
+
+  const normalizedType = extractMessageType(message);
+  const outboundPayload = resolveInboundMessagePayload(message);
+  const previewText =
+    typeof outboundPayload.text === 'string' && outboundPayload.text.trim().length > 0
+      ? outboundPayload.text
+      : '[Message from WhatsApp Business App]';
+
+  const subscriber = await upsertSubscriber(orgId, recipientPhone, undefined, {
+    direction: 'outbound',
+    optInSource: 'manual',
+  });
+
+  const conversation = await getOrCreateActiveConversation(
+    orgId,
+    subscriber._id as any,
+    previewText,
+    'outbound'
+  );
+
+  const createdMessage = await Message.create({
+    orgId,
+    conversationId: (conversation as any)._id,
+    subscriberId: subscriber._id,
+    direction: 'outbound',
+    source: 'agent',
+    type: normalizedType,
+    metaMessageId: message.id,
+    status: 'sent',
+    payload: outboundPayload,
+    sentAt: message.timestamp ? new Date(parseInt(message.timestamp, 10) * 1000) : new Date(),
+  });
+
+  await Conversation.findByIdAndUpdate(conversation._id, {
+    $set: {
+      lastOutboundMetaMessageId: message.id,
+    },
+  });
+
+  await publishMessageCreated(String(orgId), String(conversation._id), String(createdMessage._id));
+  await publishConversationUpdated(String(orgId), String(conversation._id));
 };
 
 const markWebhookProcessed = async (webhookEventId: string) => {
@@ -326,7 +513,30 @@ const processWhatsAppWebhookJob = async (job: Job<WhatsAppWebhookJobData>) => {
 
           if (change?.field === 'messages') {
             for (const message of value?.messages ?? []) {
-              await processInboundMessage(organization, value, message);
+              if (isBusinessOriginMessage(organization, message)) {
+                await processBusinessEchoMessage(organization, value, message);
+              } else {
+                await processInboundMessage(organization, value, message);
+              }
+            }
+
+            for (const statusPayload of value?.statuses ?? []) {
+              await updateMessageStatus(String(organization._id), statusPayload);
+            }
+
+            for (const errorPayload of value?.errors ?? []) {
+              await applyCoexistenceUnsupportedWebhook({
+                organization,
+                errorCode: errorPayload?.code,
+                errorTitle: errorPayload?.title,
+                errorMessage: errorPayload?.message,
+              });
+            }
+          }
+
+          if (change?.field === 'smb_message_echoes') {
+            for (const message of value?.messages ?? []) {
+              await processBusinessEchoMessage(organization, value, message);
             }
 
             for (const statusPayload of value?.statuses ?? []) {
@@ -347,6 +557,14 @@ const processWhatsAppWebhookJob = async (job: Job<WhatsAppWebhookJobData>) => {
               organization,
               event: value?.event,
               currentLimit: value?.current_limit,
+            });
+          }
+
+          if (change?.field === 'account_update') {
+            await applyCoexistenceAccountUpdateWebhook({
+              organization,
+              event: value?.event,
+              disconnectionInfo: value?.disconnection_info,
             });
           }
         }

@@ -4,8 +4,20 @@ export interface IMessage extends Document {
   orgId: mongoose.Types.ObjectId;
   conversationId: mongoose.Types.ObjectId;
   subscriberId: mongoose.Types.ObjectId;
-  direction: 'inbound' | 'outbound';
-  type: 'text' | 'image' | 'audio' | 'document' | 'video' | 'template' | 'unknown';
+  direction: 'inbound' | 'outbound' | 'system';
+  source: 'customer' | 'agent' | 'bot' | 'system' | 'broadcast';
+  senderUserId?: mongoose.Types.ObjectId;
+  type:
+    | 'text'
+    | 'image'
+    | 'audio'
+    | 'document'
+    | 'video'
+    | 'template'
+    | 'interactive'
+    | 'location'
+    | 'system'
+    | 'unknown';
   metaMessageId?: string;
   templateId?: string;
   status: 'queued' | 'received' | 'sent' | 'delivered' | 'read' | 'failed';
@@ -18,6 +30,23 @@ export interface IMessage extends Document {
     caption?: string;
     filename?: string;
     sha256?: string;
+    interactiveType?: string;
+    interactiveReplyId?: string;
+    interactiveReplyTitle?: string;
+    systemEventType?: string;
+    systemMessage?: string;
+    location?: {
+      latitude: number;
+      longitude: number;
+      name?: string;
+      address?: string;
+    };
+    replyContext?: {
+      metaMessageId?: string;
+      direction?: string;
+      source?: string;
+      previewText?: string;
+    };
     storageStatus?: 'pending' | 'stored' | 'failed';
     [key: string]: unknown;
   };
@@ -33,10 +62,21 @@ const MessageSchema: Schema = new Schema({
   orgId: { type: Schema.Types.ObjectId, ref: 'Organization', required: true },
   conversationId: { type: Schema.Types.ObjectId, ref: 'Conversation', required: true },
   subscriberId: { type: Schema.Types.ObjectId, ref: 'Subscriber', required: true },
-  direction: { type: String, enum: ['inbound', 'outbound'], required: true },
+  direction: { type: String, enum: ['inbound', 'outbound', 'system'], required: true },
+  source: {
+    type: String,
+    enum: ['customer', 'agent', 'bot', 'system', 'broadcast'],
+    default: function () {
+      if ((this as any).direction === 'inbound') {
+        return 'customer';
+      }
+      return 'agent';
+    },
+  },
+  senderUserId: { type: Schema.Types.ObjectId, ref: 'User' },
   type: {
     type: String,
-    enum: ['text', 'image', 'audio', 'document', 'video', 'template', 'unknown'],
+    enum: ['text', 'image', 'audio', 'document', 'video', 'template', 'interactive', 'location', 'system', 'unknown'],
     default: 'text',
   },
   metaMessageId: { type: String, trim: true },
@@ -53,6 +93,7 @@ const MessageSchema: Schema = new Schema({
 
 // CRITICAL INDEXES from the Blueprint
 MessageSchema.index({ orgId: 1, conversationId: 1, createdAt: -1 });
+MessageSchema.index({ orgId: 1, conversationId: 1, _id: -1 });
 MessageSchema.index(
   { orgId: 1, metaMessageId: 1 },
   {

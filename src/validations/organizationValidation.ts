@@ -13,6 +13,7 @@ export const connectMetaSchema = z.object({
       phoneNumberId: z.string().trim().min(1, 'Phone number ID is required'),
       accessToken: z.string().trim().optional(),
       code: z.string().trim().optional(),
+      coexistenceEnabled: z.boolean().optional(),
     })
     .refine((data) => Boolean(data.accessToken || data.code), {
       message: 'A Meta access token is required',
