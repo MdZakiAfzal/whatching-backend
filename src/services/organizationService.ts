@@ -2,7 +2,7 @@ import Organization from '../models/Organization';
 import Membership from '../models/Membership';
 import mongoose from 'mongoose';
 import { config } from '../config';
-import { ensureRequiredBotFlows } from './botDefaultFlowService';
+import { ensureDefaultBotCanvas } from './botCanvasService';
 
 export const createOrganization = async (name: string, userId: mongoose.Types.ObjectId) => {
   // 1. Generate a unique slug (Name + 4 random characters)
@@ -26,7 +26,7 @@ export const createOrganization = async (name: string, userId: mongoose.Types.Ob
     status: 'active',
   });
 
-  await ensureRequiredBotFlows({
+  await ensureDefaultBotCanvas({
     orgId: newOrg._id,
     userId,
   });

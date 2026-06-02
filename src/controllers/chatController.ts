@@ -1,12 +1,15 @@
 import { Response } from 'express';
 import Conversation from '../models/Conversation';
 import BotSettings from '../models/BotSettings';
-import BotFlow from '../models/BotFlow';
 import catchAsync from '../utils/catchAsync';
 import { getAiTokenUsageState } from '../services/usageService';
+import {
+  findPublishedNodeByTriggerKey,
+  getActiveCanvas,
+} from '../services/botCanvasService';
 
 export const getChatBootstrap = catchAsync(async (req: any, res: Response) => {
-  const [conversationSummary, botSettings, defaultFlow, aiUsage] = await Promise.all([
+  const [conversationSummary, botSettings, activeCanvas, aiUsage] = await Promise.all([
     Conversation.aggregate([
       { $match: { orgId: req.org._id } },
       {
@@ -21,13 +24,11 @@ export const getChatBootstrap = catchAsync(async (req: any, res: Response) => {
       },
     ]),
     BotSettings.findOne({ orgId: req.org._id }),
-    BotFlow.findOne({
-      orgId: req.org._id,
-      triggerKey: 'DEFAULT',
-      status: 'published',
-    }).select('_id triggerKey'),
+    getActiveCanvas(req.org._id),
     getAiTokenUsageState(req.org._id),
   ]);
+
+  const defaultNode = findPublishedNodeByTriggerKey(activeCanvas, 'DEFAULT');
 
   const summary = conversationSummary[0] || {
     total: 0,
@@ -54,7 +55,7 @@ export const getChatBootstrap = catchAsync(async (req: any, res: Response) => {
       },
       bot: {
         settings: botSettings || null,
-        defaultFlowReady: Boolean(defaultFlow),
+        defaultFlowReady: Boolean(defaultNode),
         aiUsage,
       },
     },

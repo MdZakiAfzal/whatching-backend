@@ -1,16 +1,17 @@
 import BotSettings from '../models/BotSettings';
-import BotFlow from '../models/BotFlow';
 import Conversation from '../models/Conversation';
 import Subscriber from '../models/Subscriber';
 import { PlanManager } from '../utils/planManager';
 import {
-  buildMetaPayloadFromFlow,
-  findPublishedFlowByReplyId,
-  getBotDefaultFlow,
-  getPublishedFlowByTriggerKey,
   normalizeTriggerKey,
-  resolveInteractiveAction,
 } from './botFlowService';
+import {
+  buildMetaPayloadFromCanvasNode,
+  ensureDefaultBotCanvas,
+  findPublishedNodeByTriggerKey,
+  getPublishedCanvasForOrg,
+  resolveCanvasAction,
+} from './botCanvasService';
 import {
   createSystemConversationMessage,
   sendBotMetaMessage,
@@ -25,7 +26,6 @@ import {
 import { logIntegrationAction } from './integrationLogService';
 import {
   DEFAULT_OPT_OUT_KEYWORDS,
-  ensureRequiredBotFlows,
   REQUIRED_BOT_TRIGGER_KEYS,
 } from './botDefaultFlowService';
 
@@ -93,7 +93,7 @@ const sendFlow = async ({
   subscriber: any;
   flow: any;
 }) => {
-  const payload = buildMetaPayloadFromFlow(flow, subscriber.phoneNumber) as Record<string, unknown>;
+  const payload = buildMetaPayloadFromCanvasNode(flow, subscriber.phoneNumber) as Record<string, unknown>;
   const previewText = buildFlowPreviewText(flow);
 
   await sendBotMetaMessage({
@@ -115,7 +115,7 @@ const sendFlow = async ({
   });
 
   conversation.mode = 'interactive';
-  conversation.activeFlowId = flow._id;
+  conversation.activeFlowId = undefined;
   conversation.activeTriggerKey = flow.triggerKey;
   await conversation.save();
 
@@ -126,6 +126,7 @@ const sendFlow = async ({
     previewText: `Bot routed to flow: ${flow.name}`,
     systemEventType: 'bot_flow_routed',
     payload: {
+      nodeId: flow.id,
       triggerKey: flow.triggerKey,
       blockType: flow.blockType,
     },
@@ -145,7 +146,8 @@ const sendDefaultFlow = async ({
   subscriber: any;
   settings: any;
 }) => {
-  const flow = await getBotDefaultFlow(String(organization._id), settings.defaultTriggerKey || 'DEFAULT');
+  const canvas = await getPublishedCanvasForOrg(String(organization._id));
+  const flow = findPublishedNodeByTriggerKey(canvas, settings.defaultTriggerKey || 'DEFAULT');
   if (!flow) {
     return false;
   }
@@ -168,10 +170,8 @@ const sendOptOutFlow = async ({
   conversation: any;
   subscriber: any;
 }) => {
-  const flow = await getPublishedFlowByTriggerKey(
-    String(organization._id),
-    REQUIRED_BOT_TRIGGER_KEYS.optOut
-  );
+  const canvas = await getPublishedCanvasForOrg(String(organization._id));
+  const flow = findPublishedNodeByTriggerKey(canvas, REQUIRED_BOT_TRIGGER_KEYS.optOut);
   if (!flow) {
     return false;
   }
@@ -262,21 +262,14 @@ const handleInteractiveReply = async ({
   settings: any;
   replyId: string;
 }) => {
-  const activeFlow = conversation.activeFlowId
-    ? await BotFlow.findOne({
-        _id: conversation.activeFlowId,
-        orgId: organization._id,
-        status: 'published',
-      })
-    : null;
-
-  let matchedFlow = activeFlow;
-  let matchedAction = resolveInteractiveAction(activeFlow as any, replyId);
-
-  if (!matchedAction) {
-    matchedFlow = await findPublishedFlowByReplyId(String(organization._id), replyId);
-    matchedAction = resolveInteractiveAction(matchedFlow as any, replyId);
-  }
+  const canvas = await getPublishedCanvasForOrg(String(organization._id));
+  const resolved = resolveCanvasAction({
+    canvas,
+    replyId,
+    activeTriggerKey: conversation.activeTriggerKey,
+  });
+  const matchedFlow = resolved?.node || null;
+  const matchedAction = resolved?.action || null;
 
   if (!matchedAction) {
     await createSystemConversationMessage({
@@ -337,7 +330,7 @@ const handleInteractiveReply = async ({
     });
   }
 
-  const nextFlow = await getPublishedFlowByTriggerKey(String(organization._id), nextTriggerKey);
+  const nextFlow = findPublishedNodeByTriggerKey(canvas, nextTriggerKey);
   if (!nextFlow) {
     return { action: 'missing_next_flow' as const };
   }
@@ -369,8 +362,9 @@ const handleAiFallback = async ({
   text: string;
 }) => {
   const plan = new PlanManager(organization);
-  const defaultFlow = await getBotDefaultFlow(
-    String(organization._id),
+  const canvas = await getPublishedCanvasForOrg(String(organization._id));
+  const defaultFlow = findPublishedNodeByTriggerKey(
+    canvas,
     settings.defaultTriggerKey || 'DEFAULT'
   );
 
@@ -412,10 +406,7 @@ const handleAiFallback = async ({
     return { action: 'quota_fallback' as const };
   }
 
-  const publishedFlows = await BotFlow.find({
-    orgId: organization._id,
-    status: 'published',
-  }).select('triggerKey');
+  const allowedTriggerKeys = Object.keys(canvas?.publishedState?.compiled.triggerIndex || {});
 
   const knowledgeChunks = await retrieveKnowledgeChunks({
     orgId: organization._id,
@@ -429,7 +420,7 @@ const handleAiFallback = async ({
     subscriberName: subscriber.firstName,
     question: text,
     knowledgeChunks,
-    allowedTriggerKeys: publishedFlows.map((flow) => flow.triggerKey),
+    allowedTriggerKeys,
     model: settings.geminiModel,
   });
 
@@ -498,10 +489,7 @@ const handleAiFallback = async ({
   }
 
   if (aiResult.routeTriggerKey) {
-    const routedFlow = await getPublishedFlowByTriggerKey(
-      String(organization._id),
-      aiResult.routeTriggerKey
-    );
+    const routedFlow = findPublishedNodeByTriggerKey(canvas, aiResult.routeTriggerKey);
 
     if (routedFlow) {
       await sendFlow({
@@ -544,9 +532,6 @@ export const routeIncomingMessage = async ({
   message: any;
 }) => {
   const settings = await getOrCreateBotSettings(String(organization._id));
-  await ensureRequiredBotFlows({
-    orgId: organization._id,
-  });
 
   const normalizedText = normalizeKeyword(message?.text?.body || '');
   const optOutSet = new Set([
@@ -648,14 +633,15 @@ export const routeIncomingMessage = async ({
 };
 
 export const getBotReadiness = async (orgId: string) => {
-  await ensureRequiredBotFlows({ orgId });
+  await ensureDefaultBotCanvas({ orgId });
 
-  const [settings, defaultFlow, optOutFlow, publishedFlows] = await Promise.all([
+  const [settings, canvas] = await Promise.all([
     getOrCreateBotSettings(orgId),
-    BotFlow.findOne({ orgId, status: 'published', triggerKey: 'DEFAULT' }).select('_id'),
-    BotFlow.findOne({ orgId, status: 'published', triggerKey: REQUIRED_BOT_TRIGGER_KEYS.optOut }).select('_id'),
-    BotFlow.countDocuments({ orgId, status: 'published' }),
+    getPublishedCanvasForOrg(orgId),
   ]);
+  const defaultFlow = findPublishedNodeByTriggerKey(canvas, 'DEFAULT');
+  const optOutFlow = findPublishedNodeByTriggerKey(canvas, REQUIRED_BOT_TRIGGER_KEYS.optOut);
+  const publishedFlows = canvas?.publishedState?.nodes.length || 0;
 
   return {
     settings,

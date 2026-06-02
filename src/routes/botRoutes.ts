@@ -6,13 +6,14 @@ import { validate } from '../middlewares/validateMiddleware';
 import { optionalSingleAttachmentUpload } from '../middlewares/uploadMiddleware';
 import * as botController from '../controllers/botController';
 import {
-  botFlowParamsSchema,
-  createBotFlowSchema,
+  botCanvasParamsSchema,
+  createBotCanvasSchema,
   createKnowledgeTextSchema,
   knowledgeSourceParamsSchema,
   patchBotSettingsSchema,
-  publishBotCanvasSchema,
-  updateBotFlowSchema,
+  publishBotCanvasDraftSchema,
+  updateBotCanvasDraftSchema,
+  updateBotCanvasSchema,
 } from '../validations/botValidation';
 
 const router = express.Router();
@@ -24,13 +25,16 @@ router.use(restrictTo('owner', 'admin'));
 router.get('/settings', botController.getBotSettings);
 router.patch('/settings', validate(patchBotSettingsSchema), botController.updateBotSettings);
 
-router.get('/flows', botController.listBotFlows);
-router.post('/flows', validate(createBotFlowSchema), botController.createBotFlow);
-router.get('/flows/:flowId', validate(botFlowParamsSchema), botController.getBotFlow);
-router.patch('/flows/:flowId', validate(updateBotFlowSchema), botController.updateBotFlow);
-router.post('/flows/:flowId/publish', validate(botFlowParamsSchema), botController.publishBotFlow);
-router.post('/flows/:flowId/archive', validate(botFlowParamsSchema), botController.archiveBotFlow);
-router.post('/flows/publish-canvas', validate(publishBotCanvasSchema), botController.publishBotCanvas);
+router.get('/canvases', botController.listBotCanvases);
+router.post('/canvases', validate(createBotCanvasSchema), botController.createBotCanvas);
+router.get('/canvases/:canvasId', validate(botCanvasParamsSchema), botController.getBotCanvas);
+router.patch('/canvases/:canvasId', validate(updateBotCanvasSchema), botController.updateBotCanvas);
+router.post('/canvases/:canvasId/archive', validate(botCanvasParamsSchema), botController.archiveBotCanvas);
+router.get('/canvases/:canvasId/draft', validate(botCanvasParamsSchema), botController.getBotCanvasDraft);
+router.put('/canvases/:canvasId/draft', validate(updateBotCanvasDraftSchema), botController.saveBotCanvasDraft);
+router.post('/canvases/:canvasId/validate', validate(botCanvasParamsSchema), botController.validateBotCanvas);
+router.post('/canvases/:canvasId/publish', validate(publishBotCanvasDraftSchema), botController.publishBotCanvasDraft);
+router.get('/canvases/:canvasId/published', validate(botCanvasParamsSchema), botController.getBotCanvasPublished);
 
 router.get('/knowledge-sources', botController.listKnowledgeSources);
 router.post('/knowledge-sources/text', validate(createKnowledgeTextSchema), botController.createKnowledgeTextSource);

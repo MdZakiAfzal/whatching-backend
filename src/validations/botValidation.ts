@@ -258,6 +258,63 @@ export const publishBotCanvasSchema = z.object({
   ]),
 });
 
+export const botCanvasParamsSchema = z.object({
+  params: z.object({
+    canvasId: objectIdSchema,
+  }),
+});
+
+const draftCanvasStateSchema = z
+  .object({
+    version: z.number().positive().optional(),
+    nodes: z.array(z.unknown()).max(1000).default([]),
+    edges: z.array(z.unknown()).max(3000).default([]),
+  })
+  .passthrough();
+
+export const createBotCanvasSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(1).max(120).optional(),
+    draftState: draftCanvasStateSchema.optional(),
+  }),
+});
+
+export const updateBotCanvasSchema = z.object({
+  params: z.object({
+    canvasId: objectIdSchema,
+  }),
+  body: z.object({
+    name: z.string().trim().min(1).max(120).optional(),
+  }),
+});
+
+export const updateBotCanvasDraftSchema = z.object({
+  params: z.object({
+    canvasId: objectIdSchema,
+  }),
+  body: z.union([
+    z.object({
+      draftState: draftCanvasStateSchema,
+    }),
+    draftCanvasStateSchema,
+  ]),
+});
+
+export const publishBotCanvasDraftSchema = z.object({
+  params: z.object({
+    canvasId: objectIdSchema,
+  }),
+  body: z
+    .union([
+      z.object({
+        draftState: draftCanvasStateSchema,
+      }),
+      draftCanvasStateSchema,
+      z.object({}).strict(),
+    ])
+    .optional(),
+});
+
 export const patchBotSettingsSchema = z.object({
   body: z.object({
     isBotEnabled: z.boolean().optional(),
