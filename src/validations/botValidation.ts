@@ -57,14 +57,29 @@ const validateFlowContentStructure = (
   }
 
   if (blockType === 'generic_carousel') {
-    if (!Array.isArray(content.cards) || content.cards.length === 0) {
+    if (typeof content.bodyText !== 'string' || content.bodyText.trim().length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Generic carousel blocks require at least one card.',
+        message: 'Generic carousel blocks require main bodyText.',
+        path: ['content', 'bodyText'],
+      });
+    }
+
+    if (!Array.isArray(content.cards) || content.cards.length < 2 || content.cards.length > 10) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Generic carousel blocks require between 2 and 10 cards.',
         path: ['content', 'cards'],
       });
       return;
     }
+
+    const firstCardButtons = Array.isArray((content.cards[0] as any)?.buttons)
+      ? (content.cards[0] as any).buttons
+      : [];
+    const firstButtonTypes = firstCardButtons.map((button: any) =>
+      String(button?.type || (button?.url ? 'url' : 'quick_reply'))
+    );
 
     content.cards.forEach((card: any, index: number) => {
       if (!card || typeof card !== 'object') {
@@ -84,20 +99,52 @@ const validateFlowContentStructure = (
         });
       }
 
-      if (card.mediaType) {
-        const mediaType = String(card.mediaType).toLowerCase();
-        if (!['image', 'document', 'video'].includes(mediaType)) {
+      const mediaType = String(card.mediaType || '').toLowerCase();
+      if (!['image', 'video'].includes(mediaType)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Carousel card ${index + 1} mediaType must be image or video.`,
+          path: ['content', 'cards', index, 'mediaType'],
+        });
+      }
+
+      if (typeof card.mediaUrl !== 'string' || card.mediaUrl.trim().length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Carousel card ${index + 1} requires mediaUrl.`,
+          path: ['content', 'cards', index, 'mediaUrl'],
+        });
+      }
+
+      if (typeof card.bodyText === 'string' && card.bodyText.length > 160) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Carousel card ${index + 1} bodyText must be 160 characters or fewer.`,
+          path: ['content', 'cards', index, 'bodyText'],
+        });
+      }
+
+      if (typeof card.bodyText === 'string' && (card.bodyText.match(/\n/g) || []).length > 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Carousel card ${index + 1} bodyText can include at most 2 line breaks.`,
+          path: ['content', 'cards', index, 'bodyText'],
+        });
+      }
+
+      if (Array.isArray(card.buttons)) {
+        const buttonTypes = card.buttons.map((button: any) =>
+          String(button?.type || (button?.url ? 'url' : 'quick_reply'))
+        );
+
+        if (
+          buttonTypes.length !== firstButtonTypes.length ||
+          buttonTypes.some((buttonType: string, buttonIndex: number) => buttonType !== firstButtonTypes[buttonIndex])
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: `Carousel card ${index + 1} mediaType must be image, document, or video.`,
-            path: ['content', 'cards', index, 'mediaType'],
-          });
-        }
-        if (typeof card.mediaUrl !== 'string' || card.mediaUrl.trim().length === 0) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `Carousel card ${index + 1} requires mediaUrl when mediaType is provided.`,
-            path: ['content', 'cards', index, 'mediaUrl'],
+            message: 'Carousel button types and counts must match across all cards.',
+            path: ['content', 'cards', index, 'buttons'],
           });
         }
       }
@@ -108,7 +155,52 @@ const validateFlowContentStructure = (
           message: `Carousel card ${index + 1} requires at least one reply button.`,
           path: ['content', 'cards', index, 'buttons'],
         });
+        return;
       }
+
+      card.buttons.forEach((button: any, buttonIndex: number) => {
+        if (!button || typeof button !== 'object') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Carousel card ${index + 1} button ${buttonIndex + 1} is invalid.`,
+            path: ['content', 'cards', index, 'buttons', buttonIndex],
+          });
+          return;
+        }
+
+        if (typeof button.label !== 'string' || button.label.trim().length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Carousel card ${index + 1} button ${buttonIndex + 1} requires label.`,
+            path: ['content', 'cards', index, 'buttons', buttonIndex, 'label'],
+          });
+        }
+
+        const buttonType = button.type || (button.url ? 'url' : 'quick_reply');
+        if (!['quick_reply', 'url'].includes(buttonType)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Carousel card ${index + 1} button ${buttonIndex + 1} type must be quick_reply or url.`,
+            path: ['content', 'cards', index, 'buttons', buttonIndex, 'type'],
+          });
+        }
+
+        if (buttonType === 'quick_reply' && typeof button.replyId !== 'string') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Carousel card ${index + 1} quick reply button ${buttonIndex + 1} requires replyId.`,
+            path: ['content', 'cards', index, 'buttons', buttonIndex, 'replyId'],
+          });
+        }
+
+        if (buttonType === 'url' && typeof button.url !== 'string') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Carousel card ${index + 1} URL button ${buttonIndex + 1} requires url.`,
+            path: ['content', 'cards', index, 'buttons', buttonIndex, 'url'],
+          });
+        }
+      });
     });
   }
 };
@@ -120,8 +212,24 @@ const baseFlowSchema = z.object({
   sortOrder: z.number().int().min(0).default(0),
   content: z.record(z.string(), z.unknown()),
   actions: z.array(flowActionSchema).max(20).default([]),
-}).superRefine((value, ctx) => {
+});
+
+const createFlowBodySchema = baseFlowSchema.superRefine((value, ctx) => {
   validateFlowContentStructure(value.blockType, value.content, ctx);
+});
+
+const updateFlowBodySchema = baseFlowSchema.partial().superRefine((value, ctx) => {
+  if (Object.keys(value).length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'At least one field must be provided to update the flow.',
+    });
+    return;
+  }
+
+  if (value.blockType && value.content) {
+    validateFlowContentStructure(value.blockType, value.content, ctx);
+  }
 });
 
 export const botFlowParamsSchema = z.object({
@@ -131,24 +239,22 @@ export const botFlowParamsSchema = z.object({
 });
 
 export const createBotFlowSchema = z.object({
-  body: baseFlowSchema,
+  body: createFlowBodySchema,
 });
 
 export const updateBotFlowSchema = z.object({
   params: z.object({
     flowId: objectIdSchema,
   }),
-  body: baseFlowSchema.partial().refine((value) => Object.keys(value).length > 0, {
-    message: 'At least one field must be provided to update the flow.',
-  }),
+  body: updateFlowBodySchema,
 });
 
 export const publishBotCanvasSchema = z.object({
   body: z.union([
     z.object({
-      flows: z.array(baseFlowSchema).min(1).max(500),
+      flows: z.array(createFlowBodySchema).min(1).max(500),
     }),
-    z.array(baseFlowSchema).min(1).max(500),
+    z.array(createFlowBodySchema).min(1).max(500),
   ]),
 });
 

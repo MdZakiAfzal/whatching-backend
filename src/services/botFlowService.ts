@@ -23,6 +23,17 @@ export const resolveInteractiveAction = (
   return flow.actions.find((action) => action.replyId === replyId) || null;
 };
 
+export const findPublishedFlowByReplyId = async (orgId: string, replyId: string) =>
+  BotFlow.findOne({
+    orgId,
+    status: 'published',
+    actions: {
+      $elemMatch: {
+        replyId,
+      },
+    },
+  });
+
 type ButtonContent = {
   bodyText: string;
   headerText?: string;
@@ -72,15 +83,16 @@ type ProductContent = {
 };
 
 type GenericCarouselContent = {
+  bodyText?: string;
   cards: Array<{
-    mediaType?: 'image' | 'document' | 'video';
+    mediaType?: 'image' | 'video';
     mediaUrl?: string;
-    filename?: string;
     bodyText: string;
-    footerText?: string;
     buttons: Array<{
-      replyId: string;
+      type?: 'quick_reply' | 'url';
+      replyId?: string;
       label: string;
+      url?: string;
     }>;
   }>;
 };
@@ -243,17 +255,21 @@ export const buildMetaPayloadFromFlow = (flow: IBotFlow, to: string) => {
       payload.type = 'interactive';
       payload.interactive = {
         type: 'carousel',
+        body: {
+          text: content.bodyText || flow.name,
+        },
         action: {
-          cards: (content.cards || []).map((card) => ({
+          cards: (content.cards || []).map((card, cardIndex) => ({
+            card_index: cardIndex,
+            type: (card.buttons || [])[0]?.type === 'url' || (card.buttons || [])[0]?.url
+              ? 'cta_url'
+              : 'button',
             ...(card.mediaType && card.mediaUrl
               ? {
                   header: {
                     type: card.mediaType,
                     [card.mediaType]: {
                       link: card.mediaUrl,
-                      ...(card.mediaType === 'document' && card.filename
-                        ? { filename: card.filename }
-                        : {}),
                     },
                   },
                 }
@@ -261,22 +277,28 @@ export const buildMetaPayloadFromFlow = (flow: IBotFlow, to: string) => {
             body: {
               text: card.bodyText,
             },
-            ...(card.footerText
-              ? {
-                  footer: {
-                    text: card.footerText,
-                  },
-                }
-              : {}),
-            buttons: (card.buttons || [])
-              .filter((button) => Boolean(button.replyId && button.label))
-              .map((button) => ({
-                type: 'reply',
-                reply: {
-                  id: button.replyId,
-                  title: button.label,
-                },
-              })),
+            action: {
+              ...((card.buttons || [])[0]?.type === 'url' || (card.buttons || [])[0]?.url
+                ? (() => {
+                    const urlButton = (card.buttons || [])[0];
+                    return {
+                      name: 'cta_url',
+                      parameters: {
+                        display_text: urlButton?.label,
+                        url: urlButton?.url,
+                      },
+                    };
+                  })()
+                : {
+                    buttons: (card.buttons || []).map((button) => ({
+                      type: 'quick_reply',
+                      quick_reply: {
+                        id: button.replyId,
+                        title: button.label,
+                      },
+                    })),
+                  }),
+            },
           })),
         },
       };

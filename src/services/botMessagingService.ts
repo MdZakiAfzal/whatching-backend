@@ -163,6 +163,18 @@ export const sendBotMetaMessage = async ({
       metaMessageId,
     };
   } catch (error: any) {
+    const providerError = error.response?.data?.error;
+    if (providerError) {
+      console.error('Meta bot message error:', {
+        code: providerError.code,
+        subcode: providerError.error_subcode,
+        type: providerError.type,
+        message: providerError.message,
+        details: providerError.error_data?.details,
+        fbtraceId: providerError.fbtrace_id,
+      });
+    }
+
     await Message.findByIdAndUpdate(queuedMessage._id, {
       status: 'failed',
       failedAt: new Date(),

@@ -5,6 +5,7 @@ import Subscriber from '../models/Subscriber';
 import { PlanManager } from '../utils/planManager';
 import {
   buildMetaPayloadFromFlow,
+  findPublishedFlowByReplyId,
   getBotDefaultFlow,
   getPublishedFlowByTriggerKey,
   normalizeTriggerKey,
@@ -269,7 +270,30 @@ const handleInteractiveReply = async ({
       })
     : null;
 
-  const matchedAction = resolveInteractiveAction(activeFlow as any, replyId);
+  let matchedFlow = activeFlow;
+  let matchedAction = resolveInteractiveAction(activeFlow as any, replyId);
+
+  if (!matchedAction) {
+    matchedFlow = await findPublishedFlowByReplyId(String(organization._id), replyId);
+    matchedAction = resolveInteractiveAction(matchedFlow as any, replyId);
+  }
+
+  if (!matchedAction) {
+    await createSystemConversationMessage({
+      organization,
+      conversation,
+      subscriber,
+      previewText: 'Ignored an outdated interactive reply because no matching action exists.',
+      systemEventType: 'interactive_reply_unmatched',
+      payload: {
+        replyId,
+        activeFlowId: conversation.activeFlowId ? String(conversation.activeFlowId) : null,
+        activeTriggerKey: conversation.activeTriggerKey || null,
+      },
+    });
+    return { action: 'no_match' as const, replyId };
+  }
+
   const isEscalation =
     matchedAction?.type === 'escalate_to_agent' ||
     settings.escalationTriggerIds?.includes(replyId);
@@ -324,7 +348,11 @@ const handleInteractiveReply = async ({
     subscriber,
     flow: nextFlow,
   });
-  return { action: 'executed_flow' as const, triggerKey: nextFlow.triggerKey };
+  return {
+    action: 'executed_flow' as const,
+    triggerKey: nextFlow.triggerKey,
+    matchedTriggerKey: matchedFlow?.triggerKey,
+  };
 };
 
 const handleAiFallback = async ({
