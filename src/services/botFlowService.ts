@@ -39,8 +39,10 @@ type ButtonContent = {
   headerText?: string;
   footerText?: string;
   mediaType?: 'image' | 'document' | 'video';
+  mediaId?: string;
   mediaUrl?: string;
   filename?: string;
+  media?: ResolvedMediaContent;
 };
 
 type ListContent = {
@@ -60,8 +62,10 @@ type ListContent = {
 
 type MediaContent = {
   caption?: string;
+  mediaId?: string;
   mediaUrl: string;
   filename?: string;
+  media?: ResolvedMediaContent;
 };
 
 type LocationContent = {
@@ -86,7 +90,9 @@ type GenericCarouselContent = {
   bodyText?: string;
   cards: Array<{
     mediaType?: 'image' | 'video';
+    mediaId?: string;
     mediaUrl?: string;
+    media?: ResolvedMediaContent;
     bodyText: string;
     buttons: Array<{
       type?: 'quick_reply' | 'url';
@@ -95,6 +101,68 @@ type GenericCarouselContent = {
       url?: string;
     }>;
   }>;
+};
+
+type ResolvedMediaContent = {
+  id?: string;
+  fileType?: 'image' | 'document' | 'video';
+  cloudinaryUrl?: string;
+  metaHandle?: string;
+  name?: string;
+};
+
+const isCloudApiMediaId = (value?: string) => Boolean(value && /^\d+$/.test(value.trim()));
+
+const toMetaCompatibleMediaLink = ({
+  url,
+  mediaType,
+}: {
+  url?: string;
+  mediaType?: 'image' | 'document' | 'video';
+}) => {
+  if (!url || mediaType !== 'image') {
+    return url;
+  }
+
+  if (!url.includes('/upload/')) {
+    return url;
+  }
+
+  const [baseUrl, queryString] = url.split('?');
+  const transformedUrl = baseUrl.replace('/upload/', '/upload/f_jpg,q_auto/');
+  return queryString ? `${transformedUrl}?${queryString}` : transformedUrl;
+};
+
+const buildMetaMediaObject = (
+  content: {
+    media?: ResolvedMediaContent;
+    mediaUrl?: string;
+    filename?: string;
+  },
+  options: {
+    includeFilename?: boolean;
+    caption?: string;
+    mediaType?: 'image' | 'document' | 'video';
+  } = {}
+) => {
+  const media = content.media || {};
+  const mediaType = options.mediaType || media.fileType;
+  const source = isCloudApiMediaId(media.metaHandle)
+    ? { id: media.metaHandle }
+    : {
+        link: toMetaCompatibleMediaLink({
+          url: media.cloudinaryUrl || content.mediaUrl,
+          mediaType,
+        }),
+      };
+
+  return {
+    ...source,
+    ...(options.caption ? { caption: options.caption } : {}),
+    ...(options.includeFilename && (content.filename || media.name)
+      ? { filename: content.filename || media.name }
+      : {}),
+  };
 };
 
 const addInteractiveTextParts = (
@@ -159,15 +227,13 @@ export const buildMetaPayloadFromFlow = (flow: IBotFlow, to: string) => {
             })),
         },
       };
-      if (content.mediaType && content.mediaUrl) {
+      if (content.mediaType && (content.media || content.mediaUrl)) {
         interactive.header = {
           type: content.mediaType,
-          [content.mediaType]: {
-            link: content.mediaUrl,
-            ...(content.mediaType === 'document' && content.filename
-              ? { filename: content.filename }
-              : {}),
-          },
+          [content.mediaType]: buildMetaMediaObject(content, {
+            includeFilename: content.mediaType === 'document',
+            mediaType: content.mediaType,
+          }),
         };
       }
       addInteractiveTextParts(interactive, content);
@@ -197,24 +263,25 @@ export const buildMetaPayloadFromFlow = (flow: IBotFlow, to: string) => {
       return payload;
     }
 
-    case 'image': {
+    case 'image':
+    case 'video': {
       const content = flow.content as MediaContent;
-      payload.type = 'image';
-      payload.image = {
-        link: content.mediaUrl,
-        ...(content.caption ? { caption: content.caption } : {}),
-      };
+      payload.type = flow.blockType;
+      payload[flow.blockType] = buildMetaMediaObject(content, {
+        caption: content.caption,
+        mediaType: flow.blockType,
+      });
       return payload;
     }
 
     case 'document': {
       const content = flow.content as MediaContent;
       payload.type = 'document';
-      payload.document = {
-        link: content.mediaUrl,
-        ...(content.caption ? { caption: content.caption } : {}),
-        ...(content.filename ? { filename: content.filename } : {}),
-      };
+      payload.document = buildMetaMediaObject(content, {
+        caption: content.caption,
+        includeFilename: true,
+        mediaType: 'document',
+      });
       return payload;
     }
 
@@ -264,13 +331,13 @@ export const buildMetaPayloadFromFlow = (flow: IBotFlow, to: string) => {
             type: (card.buttons || [])[0]?.type === 'url' || (card.buttons || [])[0]?.url
               ? 'cta_url'
               : 'button',
-            ...(card.mediaType && card.mediaUrl
+            ...(card.mediaType && (card.media || card.mediaUrl)
               ? {
                   header: {
                     type: card.mediaType,
-                    [card.mediaType]: {
-                      link: card.mediaUrl,
-                    },
+                    [card.mediaType]: buildMetaMediaObject(card, {
+                      mediaType: card.mediaType,
+                    }),
                   },
                 }
               : {}),
@@ -290,11 +357,11 @@ export const buildMetaPayloadFromFlow = (flow: IBotFlow, to: string) => {
                     };
                   })()
                 : {
-                    buttons: (card.buttons || []).map((button) => ({
+                    buttons: (card.buttons || []).map((button: any) => ({
                       type: 'quick_reply',
                       quick_reply: {
-                        id: button.replyId,
-                        title: button.label,
+                        id: button.replyId || button.id,
+                        title: button.label || button.title,
                       },
                     })),
                   }),

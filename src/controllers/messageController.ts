@@ -24,7 +24,6 @@ import {
   publishMessageUpdated,
 } from '../services/realtimeService';
 import { scheduleConversationTimeoutJob } from '../queues/conversationTimeoutQueue';
-import BotSettings from '../models/BotSettings';
 import { createSystemConversationMessage } from '../services/botMessagingService';
 
 type UploadedAttachment = {
@@ -308,8 +307,7 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
 
   const messageId = new mongoose.Types.ObjectId();
   const traceId = `reply_${String(org._id)}_${String(messageId)}`;
-  const timeoutMinutes =
-    (await BotSettings.findOne({ orgId: org._id }).select('autoTimeoutMinutes'))?.autoTimeoutMinutes || 60;
+  const timeoutMinutes = 60;
   const isFirstTakeover = conversation.mode !== 'agent_manual';
   const previewText = buildReplyPreviewText({
     messageType,

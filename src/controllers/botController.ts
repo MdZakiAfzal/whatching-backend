@@ -18,7 +18,6 @@ import {
 } from '../services/botDefaultFlowService';
 import BotCanvas from '../models/BotCanvas';
 import {
-  archiveCanvas,
   ensureDefaultBotCanvas,
   findPublishedNodeByTriggerKey,
   getActiveCanvas,
@@ -41,8 +40,8 @@ const validateFlowContent = (blockType: string, content: Record<string, unknown>
     if (!['image', 'document', 'video'].includes(mediaType)) {
       throw new AppError('Button mediaType must be image, document, or video.', 400);
     }
-    if (typeof content.mediaUrl !== 'string' || content.mediaUrl.trim().length === 0) {
-      throw new AppError('Button media headers require mediaUrl when mediaType is provided.', 400);
+    if (typeof content.mediaId !== 'string' || !/^[a-f\d]{24}$/i.test(content.mediaId.trim())) {
+      throw new AppError('Button media headers require a valid mediaId when mediaType is provided.', 400);
     }
   }
 
@@ -56,8 +55,11 @@ const validateFlowContent = (blockType: string, content: Record<string, unknown>
     }
   }
 
-  if ((blockType === 'image' || blockType === 'document') && typeof content.mediaUrl !== 'string') {
-    throw new AppError(`${blockType} bot blocks require a mediaUrl.`, 400);
+  if (
+    (blockType === 'image' || blockType === 'document' || blockType === 'video') &&
+    (typeof content.mediaId !== 'string' || !/^[a-f\d]{24}$/i.test(content.mediaId.trim()))
+  ) {
+    throw new AppError(`${blockType} bot blocks require a valid mediaId.`, 400);
   }
 
   if (blockType === 'location') {
@@ -92,11 +94,11 @@ const validateFlowContent = (blockType: string, content: Record<string, unknown>
 
       if (typedCard.mediaType) {
         const mediaType = String(typedCard.mediaType).toLowerCase();
-        if (!['image', 'document', 'video'].includes(mediaType)) {
-          throw new AppError(`Carousel card ${index + 1} mediaType must be image, document, or video.`, 400);
+        if (!['image', 'video'].includes(mediaType)) {
+          throw new AppError(`Carousel card ${index + 1} mediaType must be image or video.`, 400);
         }
-        if (typeof typedCard.mediaUrl !== 'string' || typedCard.mediaUrl.trim().length === 0) {
-          throw new AppError(`Carousel card ${index + 1} requires mediaUrl when mediaType is provided.`, 400);
+        if (typeof typedCard.mediaId !== 'string' || !/^[a-f\d]{24}$/i.test(typedCard.mediaId.trim())) {
+          throw new AppError(`Carousel card ${index + 1} requires a valid mediaId when mediaType is provided.`, 400);
         }
       }
 
@@ -145,10 +147,19 @@ export const getBotSettings = catchAsync(async (req: any, res: Response) => {
 });
 
 export const updateBotSettings = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  const allowedSettingsPatch = {
+    ...(typeof req.body.isBotEnabled === 'boolean' ? { isBotEnabled: req.body.isBotEnabled } : {}),
+    ...(typeof req.body.isAiEnabled === 'boolean' ? { isAiEnabled: req.body.isAiEnabled } : {}),
+    ...(Array.isArray(req.body.greetingKeywords) ? { greetingKeywords: req.body.greetingKeywords } : {}),
+    ...(Array.isArray(req.body.optOutKeywords) ? { optOutKeywords: req.body.optOutKeywords } : {}),
+    ...(Array.isArray(req.body.escalationTriggerIds)
+      ? { escalationTriggerIds: req.body.escalationTriggerIds }
+      : {}),
+  };
   const existing = await getOrCreateBotSettings(String(req.org._id), String(req.user._id));
   const nextSettings = {
     ...existing.toObject(),
-    ...req.body,
+    ...allowedSettingsPatch,
   };
 
   if (nextSettings.isBotEnabled) {
@@ -179,7 +190,7 @@ export const updateBotSettings = catchAsync(async (req: any, res: Response, next
     { orgId: req.org._id },
     {
       $set: {
-        ...req.body,
+        ...allowedSettingsPatch,
         updatedBy: req.user._id,
       },
     },
@@ -196,107 +207,14 @@ export const updateBotSettings = catchAsync(async (req: any, res: Response, next
   });
 });
 
-export const listBotCanvases = catchAsync(async (req: any, res: Response) => {
+export const getBotCanvasDraft = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   await ensureDefaultBotCanvas({
     orgId: req.org._id,
     userId: req.user._id,
   });
-
-  const filter: Record<string, unknown> = { orgId: req.org._id };
-  if (typeof req.query.status === 'string' && ['active', 'archived'].includes(req.query.status)) {
-    filter.status = req.query.status;
-  }
-
-  const canvases = await BotCanvas.find(filter)
-    .select('-draftState.nodes -publishedState.nodes -publishedState.edges')
-    .sort({ status: 1, updatedAt: -1 });
-
-  res.status(200).json({
-    status: 'success',
-    results: canvases.length,
-    data: { canvases },
-  });
-});
-
-export const createBotCanvas = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const existingActive = await BotCanvas.findOne({
+  const canvas = await BotCanvas.findOne({
     orgId: req.org._id,
     status: 'active',
-  }).select('_id');
-
-  if (existingActive) {
-    return next(new AppError('This organization already has an active bot canvas.', 409));
-  }
-
-  const draftState = req.body.draftState || {
-    version: 1,
-    nodes: [],
-    edges: [],
-  };
-  const canvas = await BotCanvas.create({
-    orgId: req.org._id,
-    name: req.body.name || 'Primary Bot Canvas',
-    status: 'active',
-    draftState,
-    createdBy: req.user._id,
-    updatedBy: req.user._id,
-  });
-
-  res.status(201).json({
-    status: 'success',
-    data: { canvas },
-  });
-});
-
-export const getBotCanvas = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const canvas = await BotCanvas.findOne({
-    _id: req.params.canvasId,
-    orgId: req.org._id,
-  });
-
-  if (!canvas) {
-    return next(new AppError('Bot canvas not found for this organization.', 404));
-  }
-
-  res.status(200).json({
-    status: 'success',
-    data: { canvas },
-  });
-});
-
-export const updateBotCanvas = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const canvas = await BotCanvas.findOneAndUpdate(
-    {
-      _id: req.params.canvasId,
-      orgId: req.org._id,
-      status: 'active',
-    },
-    {
-      $set: {
-        ...(req.body.name ? { name: req.body.name } : {}),
-        updatedBy: req.user._id,
-      },
-    },
-    {
-      returnDocument: 'after',
-      runValidators: true,
-    }
-  );
-
-  if (!canvas) {
-    return next(new AppError('Active bot canvas not found for this organization.', 404));
-  }
-
-  res.status(200).json({
-    status: 'success',
-    data: { canvas },
-  });
-});
-
-export const getBotCanvasDraft = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const canvas = await BotCanvas.findOne({
-    _id: req.params.canvasId,
-    orgId: req.org._id,
   }).select('_id orgId name status draftState updatedAt');
 
   if (!canvas) {
@@ -316,7 +234,6 @@ export const getBotCanvasDraft = catchAsync(async (req: any, res: Response, next
 export const saveBotCanvasDraft = catchAsync(async (req: any, res: Response) => {
   const draftState = req.body.draftState || req.body;
   const canvas = await updateCanvasDraft({
-    canvasId: req.params.canvasId,
     orgId: req.org._id,
     draftState,
     userId: req.user._id,
@@ -333,8 +250,11 @@ export const saveBotCanvasDraft = catchAsync(async (req: any, res: Response) => 
 });
 
 export const validateBotCanvas = catchAsync(async (req: any, res: Response, next: NextFunction) => {
+  await ensureDefaultBotCanvas({
+    orgId: req.org._id,
+    userId: req.user._id,
+  });
   const canvas = await BotCanvas.findOne({
-    _id: req.params.canvasId,
     orgId: req.org._id,
     status: 'active',
   }).select('draftState');
@@ -343,7 +263,10 @@ export const validateBotCanvas = catchAsync(async (req: any, res: Response, next
     return next(new AppError('Active bot canvas not found for this organization.', 404));
   }
 
-  const validation = validateCanvasDraft(canvas.draftState);
+  const validation = await validateCanvasDraft({
+    draftState: canvas.draftState,
+    orgId: req.org._id,
+  });
   res.status(200).json({
     status: 'success',
     data: { validation },
@@ -354,7 +277,6 @@ export const publishBotCanvasDraft = catchAsync(async (req: any, res: Response) 
   const body = req.body || {};
   const hasInlineDraft = Object.keys(body).length > 0;
   const result = await publishCanvasDraft({
-    canvasId: req.params.canvasId,
     orgId: req.org._id,
     userId: req.user._id,
     draftState: hasInlineDraft ? body.draftState || body : undefined,
@@ -367,9 +289,13 @@ export const publishBotCanvasDraft = catchAsync(async (req: any, res: Response) 
 });
 
 export const getBotCanvasPublished = catchAsync(async (req: any, res: Response, next: NextFunction) => {
-  const canvas = await BotCanvas.findOne({
-    _id: req.params.canvasId,
+  await ensureDefaultBotCanvas({
     orgId: req.org._id,
+    userId: req.user._id,
+  });
+  const canvas = await BotCanvas.findOne({
+    orgId: req.org._id,
+    status: 'active',
   }).select('_id orgId name status publishedState updatedAt');
 
   if (!canvas) {
@@ -383,19 +309,6 @@ export const getBotCanvasPublished = catchAsync(async (req: any, res: Response, 
       publishedState: canvas.publishedState || null,
       updatedAt: canvas.updatedAt,
     },
-  });
-});
-
-export const archiveBotCanvas = catchAsync(async (req: any, res: Response) => {
-  const canvas = await archiveCanvas({
-    canvasId: req.params.canvasId,
-    orgId: req.org._id,
-    userId: req.user._id,
-  });
-
-  res.status(200).json({
-    status: 'success',
-    data: { canvas },
   });
 });
 

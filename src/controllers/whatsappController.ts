@@ -3,12 +3,14 @@ import { config } from '../config';
 import catchAsync from '../utils/catchAsync';
 import AppError from '../utils/AppError';
 import crypto from 'crypto';
-import Organization from '../models/Organization';
 import WebhookEvent from '../models/WebhookEvent';
 import { enqueueWhatsAppWebhookJob } from '../queues/whatsappWebhookQueue';
 import * as whatsappService from '../services/whatsappService';
+import { createRedisPubSubConnection } from '../queues/redis';
 
 type RawBodyRequest = Request & { rawBody?: string };
+const META_MESSAGE_ID_TTL_SECONDS = 24 * 60 * 60;
+const webhookIdempotencyRedis = createRedisPubSubConnection('whatching-webhook-idempotency');
 
 const extractEventType = (body: any) => {
   const fields = new Set<string>();
@@ -24,55 +26,68 @@ const extractEventType = (body: any) => {
   return fields.size > 0 ? [...fields].join(',') : 'unknown';
 };
 
-const extractPhoneNumberId = (body: any) => {
+const computeWebhookEventId = (rawBody: string) =>
+  crypto.createHash('sha256').update(rawBody).digest('hex');
+
+const extractMetaWebhookDeduplicationKeys = (body: any) => {
+  const ids = new Set<string>();
+
   for (const entry of body.entry ?? []) {
     for (const change of entry.changes ?? []) {
-      const phoneNumberId = change?.value?.metadata?.phone_number_id;
-      if (typeof phoneNumberId === 'string' && phoneNumberId.length > 0) {
-        return phoneNumberId;
+      const value = change?.value;
+      for (const message of value?.messages ?? []) {
+        if (typeof message?.id === 'string' && message.id.trim().length > 0) {
+          ids.add(`message:${message.id.trim()}`);
+        }
+      }
+      for (const status of value?.statuses ?? []) {
+        if (typeof status?.id === 'string' && status.id.trim().length > 0) {
+          ids.add(`status:${status.id.trim()}:${String(status.status || 'unknown').toLowerCase()}`);
+        }
       }
     }
   }
 
-  return undefined;
+  return [...ids];
 };
 
-const extractWabaId = (body: any) => {
-  for (const entry of body.entry ?? []) {
-    if (typeof entry?.id === 'string' && entry.id.trim().length > 0) {
-      return entry.id.trim();
+const claimMetaWebhookKeys = async (deduplicationKeys: string[]) => {
+  if (deduplicationKeys.length === 0) {
+    return { hasIds: false, claimedAny: true, claimedKeys: [] as string[] };
+  }
+
+  let claimedCount = 0;
+  const claimedKeys: string[] = [];
+  for (const deduplicationKey of deduplicationKeys) {
+    const result = await webhookIdempotencyRedis.set(
+      `webhook:meta_msg:${deduplicationKey}`,
+      '1',
+      'EX',
+      META_MESSAGE_ID_TTL_SECONDS,
+      'NX'
+    );
+    if (result === 'OK') {
+      claimedCount += 1;
+      claimedKeys.push(deduplicationKey);
     }
   }
 
-  return undefined;
+  return {
+    hasIds: true,
+    claimedAny: claimedCount > 0,
+    claimedKeys,
+  };
 };
 
-const resolveOrgIdFromWebhook = async (body: any) => {
-  const phoneNumberId = extractPhoneNumberId(body);
-  if (phoneNumberId) {
-    const organization = await Organization.findOne({
-      'metaConfig.phoneNumberId': phoneNumberId,
-    }).select('_id');
-
-    if (organization) {
-      return String(organization._id);
-    }
+const releaseMetaWebhookKeys = async (deduplicationKeys: string[]) => {
+  if (deduplicationKeys.length === 0) {
+    return;
   }
 
-  const wabaId = extractWabaId(body);
-  if (!wabaId) {
-    return undefined;
-  }
-
-  const organization = await Organization.findOne({
-    'metaConfig.wabaId': wabaId,
-  }).select('_id');
-
-  return organization ? String(organization._id) : undefined;
+  await webhookIdempotencyRedis.del(
+    ...deduplicationKeys.map((deduplicationKey) => `webhook:meta_msg:${deduplicationKey}`)
+  );
 };
-
-const computeWebhookEventId = (rawBody: string) =>
-  crypto.createHash('sha256').update(rawBody).digest('hex');
 
 /**
  * META WEBHOOK VERIFICATION (GET)
@@ -119,47 +134,57 @@ export const handleWebhook = catchAsync(async (req: Request, res: Response) => {
   // IMPORTANT: WhatsApp webhooks have a specific nested structure
   // We check if it's a valid WhatsApp message notification
   if (body.object === 'whatsapp_business_account') {
-    const eventId = computeWebhookEventId(rawBody);
-
-    let webhookEvent;
-    let shouldEnqueue = false;
-
+    let claimedDeduplicationKeys: string[] = [];
     try {
-      webhookEvent = await WebhookEvent.create({
-        orgId: await resolveOrgIdFromWebhook(body),
-        provider: 'whatsapp',
-        eventType: extractEventType(body),
-        eventId,
-        signatureVerified,
-        payload: body,
-        processingStatus: 'pending',
-      });
-      shouldEnqueue = true;
-    } catch (error: any) {
-      if (error?.code === 11000) {
-        webhookEvent = await WebhookEvent.findOne({
-          provider: 'whatsapp',
-          eventId,
-        });
-      } else {
-        throw error;
+      const idempotency = await claimMetaWebhookKeys(extractMetaWebhookDeduplicationKeys(body));
+      claimedDeduplicationKeys = idempotency.claimedKeys;
+      if (idempotency.hasIds && !idempotency.claimedAny) {
+        return res.status(200).send('EVENT_RECEIVED');
       }
+    } catch (error) {
+      console.warn('WhatsApp webhook idempotency check failed; continuing with normal processing.');
     }
 
-    if (webhookEvent && shouldEnqueue) {
-      if (webhookEvent.orgId) {
-        await Organization.findByIdAndUpdate(webhookEvent.orgId, {
-          $set: {
-            'metaConfig.webhookVerifiedAt': new Date(),
-            'metaConfig.lastHealthCheckAt': new Date(),
-          },
+    try {
+      const eventId = computeWebhookEventId(rawBody);
+
+      let webhookEvent;
+      let shouldEnqueue = false;
+
+      try {
+        webhookEvent = await WebhookEvent.create({
+          provider: 'whatsapp',
+          eventType: extractEventType(body),
+          eventId,
+          signatureVerified,
+          payload: body,
+          processingStatus: 'pending',
         });
+        shouldEnqueue = true;
+      } catch (error: any) {
+        if (error?.code === 11000) {
+          webhookEvent = await WebhookEvent.findOne({
+            provider: 'whatsapp',
+            eventId,
+          });
+        } else {
+          throw error;
+        }
       }
 
-      await enqueueWhatsAppWebhookJob({
-        webhookEventId: String(webhookEvent._id),
-        orgId: webhookEvent.orgId ? String(webhookEvent.orgId) : undefined,
-      });
+      if (webhookEvent && shouldEnqueue) {
+        await enqueueWhatsAppWebhookJob({
+          webhookEventId: String(webhookEvent._id),
+          orgId: webhookEvent.orgId ? String(webhookEvent.orgId) : undefined,
+        });
+      }
+    } catch (error) {
+      try {
+        await releaseMetaWebhookKeys(claimedDeduplicationKeys);
+      } catch (releaseError) {
+        console.warn('Failed to release WhatsApp webhook idempotency keys after enqueue failure.');
+      }
+      throw error;
     }
 
     res.status(200).send('EVENT_RECEIVED');

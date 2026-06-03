@@ -23,6 +23,16 @@ export const bulkUploadMedia = catchAsync(async (req: any, res: Response, next: 
     return next(new AppError('Please provide at least one file to upload.', 400));
   }
 
+  const unsupportedWebpFile = files.find((file) => file.mimetype === 'image/webp');
+  if (unsupportedWebpFile) {
+    return next(
+      new AppError(
+        `WebP images are not supported by WhatsApp media messages. Please upload ${unsupportedWebpFile.originalname} as JPG or PNG.`,
+        400
+      )
+    );
+  }
+
   // 1. Fetch credentials
   const organization = await Organization.findById(orgId).select('+metaConfig.accessToken');
   const accessToken = organization?.metaConfig?.accessToken ? decrypt(organization.metaConfig.accessToken) : null;

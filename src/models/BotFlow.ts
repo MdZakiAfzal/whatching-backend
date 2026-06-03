@@ -7,6 +7,7 @@ export type BotFlowBlockType =
   | 'list'
   | 'image'
   | 'document'
+  | 'video'
   | 'location'
   | 'product_carousel'
   | 'generic_carousel';
@@ -27,6 +28,20 @@ export interface IBotFlowAction {
   metadata?: Record<string, unknown>;
 }
 
+export interface IBotFlowMediaReference {
+  mediaId: string;
+  mediaType?: 'image' | 'document' | 'video';
+  media?: {
+    id: string;
+    fileType: 'image' | 'document' | 'video';
+    cloudinaryUrl: string;
+    metaHandle?: string;
+    name?: string;
+  };
+}
+
+export type IBotFlowContent = Record<string, unknown> & Partial<IBotFlowMediaReference>;
+
 export interface IBotFlow extends Document {
   orgId: mongoose.Types.ObjectId;
   createdBy?: mongoose.Types.ObjectId;
@@ -37,7 +52,7 @@ export interface IBotFlow extends Document {
   blockType: BotFlowBlockType;
   sortOrder: number;
   version: number;
-  content: Record<string, unknown>;
+  content: IBotFlowContent;
   actions: IBotFlowAction[];
   publishedAt?: Date;
   archivedAt?: Date;
@@ -75,7 +90,7 @@ const BotFlowSchema = new Schema<IBotFlow>(
     name: { type: String, required: true, trim: true },
     blockType: {
       type: String,
-      enum: ['text', 'buttons', 'list', 'image', 'document', 'location', 'product_carousel', 'generic_carousel'],
+      enum: ['text', 'buttons', 'list', 'image', 'document', 'video', 'location', 'product_carousel', 'generic_carousel'],
       required: true,
     },
     sortOrder: { type: Number, default: 0 },

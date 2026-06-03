@@ -348,6 +348,13 @@ export const updateConversationStatus = catchAsync(async (req: any, res: Respons
   conversation.status = req.body.status;
   if (req.body.status === 'resolved') {
     conversation.unreadCount = 0;
+    conversation.mode = 'interactive';
+    conversation.automationPausedUntil = undefined;
+    conversation.handoffReason = undefined;
+    conversation.handoffRequestedAt = undefined;
+    conversation.manualTakeoverAt = undefined;
+    conversation.manualTakeoverBy = undefined;
+    conversation.lastAgentReplyAt = undefined;
   }
   await conversation.save();
 

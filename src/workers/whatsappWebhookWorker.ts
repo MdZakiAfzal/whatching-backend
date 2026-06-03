@@ -6,7 +6,10 @@ import Conversation from '../models/Conversation';
 import { upsertSubscriber } from '../services/subscriberService';
 import { getOrCreateActiveConversation } from '../services/conversationService';
 import { QUEUE_NAMES } from '../queues/names';
-import { WhatsAppWebhookJobData } from '../queues/whatsappWebhookQueue';
+import {
+  enqueueWhatsAppWebhookDlqJob,
+  WhatsAppWebhookJobData,
+} from '../queues/whatsappWebhookQueue';
 import { createWorkerConnection } from '../queues/redis';
 import Organization from '../models/Organization';
 import { syncBroadcastRecipientFromMessageStatus } from '../services/broadcastService';
@@ -65,20 +68,49 @@ const isBusinessOriginMessage = (organization: any, message: any) => {
   return Boolean(sender && displayNumber && sender === displayNumber);
 };
 
+const extractInteractiveReply = (message: any) => {
+  const buttonReply = message?.interactive?.button_reply;
+  if (buttonReply?.id) {
+    return {
+      type: 'button_reply',
+      id: buttonReply.id,
+      title: buttonReply.title,
+      description: buttonReply.description,
+    };
+  }
+
+  const listReply = message?.interactive?.list_reply;
+  if (listReply?.id) {
+    return {
+      type: 'list_reply',
+      id: listReply.id,
+      title: listReply.title,
+      description: listReply.description,
+    };
+  }
+
+  const quickReply = message?.interactive?.quick_reply || message?.button;
+  if (quickReply?.id || quickReply?.payload) {
+    return {
+      type: 'quick_reply',
+      id: quickReply.id || quickReply.payload,
+      title: quickReply.title || quickReply.text,
+      description: quickReply.description,
+    };
+  }
+
+  return null;
+};
+
 const buildInboundMessagePreview = (message: any) => {
   if (message.type === 'text') {
     return message.text?.body || '';
   }
 
   if (message.type === 'interactive') {
-    const buttonReply = message.interactive?.button_reply;
-    if (buttonReply?.title) {
-      return buttonReply.title;
-    }
-
-    const listReply = message.interactive?.list_reply;
-    if (listReply?.title) {
-      return listReply.title;
+    const interactiveReply = extractInteractiveReply(message);
+    if (interactiveReply?.title) {
+      return interactiveReply.title;
     }
 
     return '[Interactive response]';
@@ -117,14 +149,13 @@ const resolveInboundMessagePayload = (message: any) => {
   }
 
   if (message.type === 'interactive') {
-    const buttonReply = message.interactive?.button_reply;
-    const listReply = message.interactive?.list_reply;
+    const interactiveReply = extractInteractiveReply(message);
     return {
       text: preview,
-      interactiveType: buttonReply ? 'button_reply' : listReply ? 'list_reply' : 'interactive',
-      interactiveReplyId: buttonReply?.id || listReply?.id,
-      interactiveReplyTitle: buttonReply?.title || listReply?.title,
-      interactiveReplyDescription: listReply?.description,
+      interactiveType: interactiveReply?.type || 'interactive',
+      interactiveReplyId: interactiveReply?.id,
+      interactiveReplyTitle: interactiveReply?.title,
+      interactiveReplyDescription: interactiveReply?.description,
     };
   }
 
@@ -225,6 +256,13 @@ const updateMessageStatus = async (
     update.failedAt = eventTimestamp;
     update.errorCode = statusPayload.errors?.[0]?.code ? String(statusPayload.errors[0].code) : undefined;
     update.errorMessage = statusPayload.errors?.[0]?.title || statusPayload.errors?.[0]?.message;
+    console.error('🛑 Meta message delivery failed:', {
+      orgId,
+      metaMessageId: statusPayload.id,
+      errorCode: update.errorCode,
+      errorMessage: update.errorMessage,
+      details: statusPayload.errors?.[0],
+    });
   } else if (normalizedStatus === 'sent') {
     update.status = 'sent';
     update.sentAt = eventTimestamp;
@@ -387,12 +425,15 @@ const processInboundMessage = async (organization: any, value: any, message: any
   }
 
   if (!existingMessage && subscriber && conversation) {
-    await routeIncomingMessage({
+    const botRouteResult = await routeIncomingMessage({
       organization,
       conversation,
       subscriber,
       message,
     });
+    console.log(
+      `🤖 BOT ROUTE: org=${String(orgId)} conversation=${String(conversation._id)} result=${JSON.stringify(botRouteResult)}`
+    );
   }
 
   console.log(`✅ INBOX: Message from ${profileName || phoneNumber}: "${inboundPayload.text}"`);
@@ -574,6 +615,16 @@ const processWhatsAppWebhookJob = async (job: Job<WhatsAppWebhookJobData>) => {
     await markWebhookProcessed(String(webhookEvent._id));
   } catch (error) {
     await markWebhookFailed(String(webhookEvent._id), error);
+    const maxAttempts = Number(job.opts.attempts || 1);
+    const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
+    if (isFinalAttempt) {
+      await enqueueWhatsAppWebhookDlqJob({
+        ...job.data,
+        failedAt: new Date().toISOString(),
+        attemptsMade: job.attemptsMade + 1,
+        errorMessage: error instanceof Error ? error.message : 'Unknown worker error',
+      });
+    }
     throw error;
   }
 };

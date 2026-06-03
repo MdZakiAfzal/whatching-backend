@@ -134,6 +134,18 @@ export const sendBotMetaMessage = async ({
     );
 
     const metaMessageId = response.data.messages?.[0]?.id;
+    console.log('✅ Meta bot message sent:', {
+      orgId: String(organization._id),
+      conversationId: String(conversation._id),
+      localMessageId: String(queuedMessage._id),
+      metaMessageId,
+      type,
+      interactiveType:
+        typeof payload.interactive === 'object' && payload.interactive
+          ? (payload.interactive as any).type
+          : undefined,
+    });
+
     await Message.findByIdAndUpdate(queuedMessage._id, {
       status: 'sent',
       sentAt: new Date(),

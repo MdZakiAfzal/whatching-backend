@@ -1,5 +1,10 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import { BotFlowActionType, BotFlowBlockType, IBotFlowAction } from './BotFlow';
+import {
+  BotFlowActionType,
+  BotFlowBlockType,
+  IBotFlowAction,
+  IBotFlowContent,
+} from './BotFlow';
 
 export type BotCanvasStatus = 'active' | 'archived';
 
@@ -9,7 +14,7 @@ export interface IBotCanvasNode {
   name: string;
   blockType: BotFlowBlockType;
   sortOrder?: number;
-  content: Record<string, unknown>;
+  content: IBotFlowContent;
   actions: IBotFlowAction[];
   position?: {
     x: number;

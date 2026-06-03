@@ -24,16 +24,28 @@ import {
   publishEscalationEvent,
 } from './realtimeService';
 import { logIntegrationAction } from './integrationLogService';
+import { scheduleConversationTimeoutJob } from '../queues/conversationTimeoutQueue';
 import {
   DEFAULT_OPT_OUT_KEYWORDS,
   REQUIRED_BOT_TRIGGER_KEYS,
 } from './botDefaultFlowService';
+
+const USER_ESCALATION_PAUSE_MS = 24 * 60 * 60 * 1000;
 
 const normalizeKeyword = (value: string) =>
   value
     .trim()
     .replace(/\s+/g, ' ')
     .toUpperCase();
+
+const extractInteractiveReplyId = (message: any) =>
+  message?.interactive?.button_reply?.id ||
+  message?.interactive?.list_reply?.id ||
+  message?.interactive?.quick_reply?.id ||
+  message?.interactive?.quick_reply?.payload ||
+  message?.button?.id ||
+  message?.button?.payload ||
+  null;
 
 const isConversationPaused = (conversation: any) =>
   conversation.mode === 'agent_manual' &&
@@ -237,7 +249,14 @@ const maybeEscalateConversation = async ({
   subscriber: any;
   reason: string;
 }) => {
-  await setConversationPending({ conversation, reason });
+  const now = new Date();
+  conversation.status = 'pending';
+  conversation.mode = 'agent_manual';
+  conversation.handoffRequestedAt = now;
+  conversation.handoffReason = reason;
+  conversation.automationPausedUntil = new Date(now.getTime() + USER_ESCALATION_PAUSE_MS);
+  await conversation.save();
+
   await createSystemConversationMessage({
     organization,
     conversation,
@@ -246,6 +265,15 @@ const maybeEscalateConversation = async ({
     systemEventType: 'conversation_escalated',
     payload: { reason },
   });
+  await scheduleConversationTimeoutJob(
+    {
+      orgId: String(organization._id),
+      conversationId: String(conversation._id),
+      traceId: `user_escalation_${String(organization._id)}_${String(conversation._id)}_${now.getTime()}`,
+      createdAt: now.toISOString(),
+    },
+    USER_ESCALATION_PAUSE_MS
+  );
   await publishEscalationEvent(String(organization._id), String(conversation._id), reason);
 };
 
@@ -580,16 +608,15 @@ export const routeIncomingMessage = async ({
     return { action: 'pending_wait' as const };
   }
 
-  const interactiveReply =
-    message?.interactive?.button_reply || message?.interactive?.list_reply;
+  const interactiveReplyId = extractInteractiveReplyId(message);
 
-  if (interactiveReply?.id) {
+  if (interactiveReplyId) {
     return handleInteractiveReply({
       organization,
       conversation,
       subscriber,
       settings,
-      replyId: interactiveReply.id,
+      replyId: interactiveReplyId,
     });
   }
 

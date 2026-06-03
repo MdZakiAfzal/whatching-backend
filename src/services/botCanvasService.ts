@@ -8,21 +8,20 @@ import BotCanvas, {
 } from '../models/BotCanvas';
 import BotSettings from '../models/BotSettings';
 import { BotFlowBlockType, IBotFlowAction } from '../models/BotFlow';
+import Media from '../models/Media';
 import AppError from '../utils/AppError';
 import { buildMetaPayloadFromFlow, normalizeTriggerKey } from './botFlowService';
 import {
   DEFAULT_OPT_OUT_KEYWORDS,
   REQUIRED_BOT_TRIGGER_KEYS,
 } from './botDefaultFlowService';
+import { createRedisPubSubConnection } from '../queues/redis';
 
-const LIVE_CANVAS_CACHE_TTL_MS = 60_000;
+const LIVE_CANVAS_CACHE_TTL_SECONDS = 60 * 60;
+const canvasCacheRedis = createRedisPubSubConnection('whatching-bot-canvas-cache');
 
-type CachedPublishedCanvas = {
-  expiresAt: number;
-  canvas: IBotCanvas | null;
-};
-
-const publishedCanvasCache = new Map<string, CachedPublishedCanvas>();
+const buildPublishedCanvasCacheKey = (orgId: string | mongoose.Types.ObjectId) =>
+  `bot_canvas:published:${String(orgId)}`;
 
 const BLOCK_TYPES = new Set<BotFlowBlockType>([
   'text',
@@ -30,10 +29,13 @@ const BLOCK_TYPES = new Set<BotFlowBlockType>([
   'list',
   'image',
   'document',
+  'video',
   'location',
   'product_carousel',
   'generic_carousel',
 ]);
+
+const objectIdPattern = /^[a-f\d]{24}$/i;
 
 export const normalizeCanvasNodeId = (value: unknown, fallback: string) => {
   const normalized = typeof value === 'string' ? value.trim() : '';
@@ -283,6 +285,135 @@ const assertText = (
   }
 };
 
+type CanvasMediaSnapshot = {
+  id: string;
+  fileType: 'image' | 'document' | 'video';
+  cloudinaryUrl: string;
+  metaHandle?: string;
+  name?: string;
+};
+
+type CanvasMediaReference = {
+  mediaId: string;
+  expectedTypes: Array<'image' | 'document' | 'video'>;
+  path: string;
+  attach: (media: CanvasMediaSnapshot) => void;
+};
+
+const isValidMediaId = (value: unknown) =>
+  typeof value === 'string' && objectIdPattern.test(value.trim());
+
+const collectMediaReferences = (nodes: IBotCanvasNode[]) => {
+  const references: CanvasMediaReference[] = [];
+
+  for (const node of nodes) {
+    const content = node.content || {};
+
+    if (node.blockType === 'buttons' && content.mediaType) {
+      const mediaType = String(content.mediaType).toLowerCase() as 'image' | 'document' | 'video';
+      if (isValidMediaId(content.mediaId) && ['image', 'document', 'video'].includes(mediaType)) {
+        references.push({
+          mediaId: String(content.mediaId).trim(),
+          expectedTypes: [mediaType],
+          path: `${node.triggerKey}.content.mediaId`,
+          attach: (media) => {
+            content.media = media;
+          },
+        });
+      }
+    }
+
+    if (node.blockType === 'image' || node.blockType === 'document' || node.blockType === 'video') {
+      if (isValidMediaId(content.mediaId)) {
+        references.push({
+          mediaId: String(content.mediaId).trim(),
+          expectedTypes: [node.blockType],
+          path: `${node.triggerKey}.content.mediaId`,
+          attach: (media) => {
+            content.media = media;
+          },
+        });
+      }
+    }
+
+    if (node.blockType === 'generic_carousel' && Array.isArray(content.cards)) {
+      const cards = content.cards;
+      cards.forEach((card, cardIndex) => {
+        const typedCard = asObject(card);
+        const mediaType = String(typedCard.mediaType || '').toLowerCase() as 'image' | 'video';
+        if (isValidMediaId(typedCard.mediaId) && ['image', 'video'].includes(mediaType)) {
+          references.push({
+            mediaId: String(typedCard.mediaId).trim(),
+            expectedTypes: [mediaType],
+            path: `${node.triggerKey}.content.cards.${cardIndex}.mediaId`,
+            attach: (media) => {
+              typedCard.media = media;
+              cards[cardIndex] = typedCard;
+            },
+          });
+        }
+      });
+    }
+  }
+
+  return references;
+};
+
+const hydrateCanvasMediaReferences = async ({
+  orgId,
+  nodes,
+  errors,
+}: {
+  orgId?: mongoose.Types.ObjectId | string;
+  nodes: IBotCanvasNode[];
+  errors: string[];
+}) => {
+  if (!orgId) {
+    return;
+  }
+
+  const references = collectMediaReferences(nodes);
+  if (references.length === 0) {
+    return;
+  }
+
+  const uniqueMediaIds = [...new Set(references.map((reference) => reference.mediaId))];
+  const mediaDocs = await Media.find({
+    _id: { $in: uniqueMediaIds },
+    orgId,
+  }).select('_id fileType cloudinaryUrl metaHandle name');
+
+  const mediaById = new Map(
+    mediaDocs.map((media) => [
+      String(media._id),
+      {
+        id: String(media._id),
+        fileType: media.fileType,
+        cloudinaryUrl: media.cloudinaryUrl,
+        metaHandle: media.metaHandle,
+        name: media.name,
+      } satisfies CanvasMediaSnapshot,
+    ])
+  );
+
+  for (const reference of references) {
+    const media = mediaById.get(reference.mediaId);
+    if (!media) {
+      errors.push(`${reference.path} references a media asset that does not exist in this organization.`);
+      continue;
+    }
+
+    if (!reference.expectedTypes.includes(media.fileType)) {
+      errors.push(
+        `${reference.path} references ${media.fileType} media, but expected ${reference.expectedTypes.join(' or ')}.`
+      );
+      continue;
+    }
+
+    reference.attach(media);
+  }
+};
+
 const validateNodeContent = (node: IBotCanvasNode, errors: string[]) => {
   const content = node.content || {};
 
@@ -314,8 +445,8 @@ const validateNodeContent = (node: IBotCanvasNode, errors: string[]) => {
         errors
       );
       assertText(
-        typeof content.mediaUrl === 'string' && content.mediaUrl.trim().length > 0,
-        `${node.triggerKey} button media header requires mediaUrl.`,
+        isValidMediaId(content.mediaId),
+        `${node.triggerKey} button media header requires a valid mediaId.`,
         errors
       );
     }
@@ -339,10 +470,10 @@ const validateNodeContent = (node: IBotCanvasNode, errors: string[]) => {
     );
   }
 
-  if (node.blockType === 'image' || node.blockType === 'document') {
+  if (node.blockType === 'image' || node.blockType === 'document' || node.blockType === 'video') {
     assertText(
-      typeof content.mediaUrl === 'string' && content.mediaUrl.trim().length > 0,
-      `${node.triggerKey} ${node.blockType} block requires content.mediaUrl.`,
+      isValidMediaId(content.mediaId),
+      `${node.triggerKey} ${node.blockType} block requires a valid content.mediaId.`,
       errors
     );
   }
@@ -392,8 +523,8 @@ const validateNodeContent = (node: IBotCanvasNode, errors: string[]) => {
           errors
         );
         assertText(
-          typeof typedCard.mediaUrl === 'string' && typedCard.mediaUrl.trim().length > 0,
-          `${node.triggerKey} carousel card ${cardIndex + 1} requires mediaUrl.`,
+          isValidMediaId(typedCard.mediaId),
+          `${node.triggerKey} carousel card ${cardIndex + 1} requires a valid mediaId.`,
           errors
         );
         assertText(
@@ -406,7 +537,15 @@ const validateNodeContent = (node: IBotCanvasNode, errors: string[]) => {
   }
 };
 
-const compileCanvasState = (rawState: unknown, userId?: string | mongoose.Types.ObjectId) => {
+const compileCanvasState = async ({
+  rawState,
+  userId,
+  orgId,
+}: {
+  rawState: unknown;
+  userId?: string | mongoose.Types.ObjectId;
+  orgId?: string | mongoose.Types.ObjectId;
+}) => {
   const errors: string[] = [];
   const warnings: string[] = [];
   const normalized = normalizeCanvasState(rawState);
@@ -447,6 +586,12 @@ const compileCanvasState = (rawState: unknown, userId?: string | mongoose.Types.
       errors.push(`Edge "${edge.id}" has missing target node "${edge.target}".`);
     }
   }
+
+  await hydrateCanvasMediaReferences({
+    orgId,
+    nodes: normalized.nodes,
+    errors,
+  });
 
   const triggerIndex: Record<string, string> = {};
   const replyIndex: Record<string, IBotCanvasCompiledAction> = {};
@@ -553,8 +698,14 @@ const compileCanvasState = (rawState: unknown, userId?: string | mongoose.Types.
   };
 };
 
-export const validateCanvasDraft = (draftState: unknown) => {
-  const compiled = compileCanvasState(draftState);
+export const validateCanvasDraft = async ({
+  draftState,
+  orgId,
+}: {
+  draftState: unknown;
+  orgId?: string | mongoose.Types.ObjectId;
+}) => {
+  const compiled = await compileCanvasState({ rawState: draftState, orgId });
   return {
     valid: compiled.valid,
     errors: compiled.errors,
@@ -568,8 +719,12 @@ export const validateCanvasDraft = (draftState: unknown) => {
   };
 };
 
-export const invalidateCanvasCache = (orgId: string | mongoose.Types.ObjectId) => {
-  publishedCanvasCache.delete(String(orgId));
+export const invalidateCanvasCache = async (orgId: string | mongoose.Types.ObjectId) => {
+  try {
+    await canvasCacheRedis.del(buildPublishedCanvasCacheKey(orgId));
+  } catch (error) {
+    console.warn(`Failed to invalidate bot canvas cache for org ${String(orgId)}.`);
+  }
 };
 
 export const ensureDefaultBotCanvas = async ({
@@ -586,7 +741,11 @@ export const ensureDefaultBotCanvas = async ({
 
   if (!existingCanvas) {
     const defaultState = buildDefaultCanvasState();
-    const compiled = compileCanvasState(defaultState, userId);
+    const compiled = await compileCanvasState({
+      rawState: defaultState,
+      userId,
+      orgId,
+    });
 
     await BotCanvas.create({
       orgId,
@@ -620,10 +779,14 @@ export const getActiveCanvas = async (orgId: string | mongoose.Types.ObjectId) =
 };
 
 export const getPublishedCanvasForOrg = async (orgId: string | mongoose.Types.ObjectId) => {
-  const orgKey = String(orgId);
-  const cached = publishedCanvasCache.get(orgKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.canvas;
+  const cacheKey = buildPublishedCanvasCacheKey(orgId);
+  try {
+    const cached = await canvasCacheRedis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached) as IBotCanvas;
+    }
+  } catch (error) {
+    console.warn(`Failed to read bot canvas cache for org ${String(orgId)}; falling back to MongoDB.`);
   }
 
   await ensureDefaultBotCanvas({ orgId });
@@ -633,27 +796,38 @@ export const getPublishedCanvasForOrg = async (orgId: string | mongoose.Types.Ob
     publishedState: { $exists: true },
   });
 
-  publishedCanvasCache.set(orgKey, {
-    canvas,
-    expiresAt: Date.now() + LIVE_CANVAS_CACHE_TTL_MS,
-  });
+  if (canvas) {
+    try {
+      await canvasCacheRedis.set(
+        cacheKey,
+        JSON.stringify({
+          orgId: String(canvas.orgId),
+          status: canvas.status,
+          publishedState: canvas.publishedState,
+        }),
+        'EX',
+        LIVE_CANVAS_CACHE_TTL_SECONDS
+      );
+    } catch (error) {
+      console.warn(`Failed to write bot canvas cache for org ${String(orgId)}.`);
+    }
+  }
 
   return canvas;
 };
 
 export const updateCanvasDraft = async ({
-  canvasId,
   orgId,
   draftState,
   userId,
 }: {
-  canvasId: string;
   orgId: mongoose.Types.ObjectId | string;
   draftState: Record<string, unknown>;
   userId?: mongoose.Types.ObjectId | string;
 }) => {
+  await ensureDefaultBotCanvas({ orgId, userId });
   const canvas = await BotCanvas.findOneAndUpdate(
-    { _id: canvasId, orgId, status: 'active' },
+    { orgId, status: 'active' },
     {
       $set: {
         draftState: {
@@ -678,23 +852,26 @@ export const updateCanvasDraft = async ({
 };
 
 export const publishCanvasDraft = async ({
-  canvasId,
   orgId,
   userId,
   draftState,
 }: {
-  canvasId: string;
   orgId: mongoose.Types.ObjectId | string;
   userId?: mongoose.Types.ObjectId | string;
   draftState?: Record<string, unknown>;
 }) => {
-  const canvas = await BotCanvas.findOne({ _id: canvasId, orgId, status: 'active' });
+  await ensureDefaultBotCanvas({ orgId, userId });
+  const canvas = await BotCanvas.findOne({ orgId, status: 'active' });
   if (!canvas) {
     throw new AppError('Active bot canvas not found for this organization.', 404);
   }
 
   const nextDraftState = draftState || canvas.draftState;
-  const compiled = compileCanvasState(nextDraftState, userId);
+  const compiled = await compileCanvasState({
+    rawState: nextDraftState,
+    userId,
+    orgId,
+  });
   if (!compiled.valid) {
     throw new AppError(`Canvas validation failed: ${compiled.errors.join(' ')}`, 400);
   }
@@ -709,7 +886,7 @@ export const publishCanvasDraft = async ({
   canvas.publishedState = compiled.publishedState;
   canvas.updatedBy = userId as mongoose.Types.ObjectId | undefined;
   await canvas.save();
-  invalidateCanvasCache(orgId);
+  await invalidateCanvasCache(orgId);
 
   return {
     canvas,
@@ -725,30 +902,6 @@ export const publishCanvasDraft = async ({
       },
     },
   };
-};
-
-export const archiveCanvas = async ({
-  canvasId,
-  orgId,
-  userId,
-}: {
-  canvasId: string;
-  orgId: mongoose.Types.ObjectId | string;
-  userId?: mongoose.Types.ObjectId | string;
-}) => {
-  const canvas = await BotCanvas.findOne({ _id: canvasId, orgId, status: 'active' });
-  if (!canvas) {
-    throw new AppError('Active bot canvas not found for this organization.', 404);
-  }
-
-  canvas.status = 'archived';
-  canvas.archivedAt = new Date();
-  canvas.archivedBy = userId as mongoose.Types.ObjectId | undefined;
-  canvas.updatedBy = userId as mongoose.Types.ObjectId | undefined;
-  await canvas.save();
-  invalidateCanvasCache(orgId);
-
-  return canvas;
 };
 
 export const findPublishedNodeByTriggerKey = (

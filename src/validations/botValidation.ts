@@ -18,6 +18,7 @@ const botFlowBlockTypeSchema = z.enum([
   'list',
   'image',
   'document',
+  'video',
   'location',
   'product_carousel',
   'generic_carousel',
@@ -46,13 +47,23 @@ const validateFlowContentStructure = (
           path: ['content', 'mediaType'],
         });
       }
-      if (typeof content.mediaUrl !== 'string' || content.mediaUrl.trim().length === 0) {
+      if (typeof content.mediaId !== 'string' || !/^[a-f\d]{24}$/i.test(content.mediaId.trim())) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'Button media headers require mediaUrl when mediaType is provided.',
-          path: ['content', 'mediaUrl'],
+          message: 'Button media headers require a valid mediaId when mediaType is provided.',
+          path: ['content', 'mediaId'],
         });
       }
+    }
+  }
+
+  if (blockType === 'image' || blockType === 'document' || blockType === 'video') {
+    if (typeof content.mediaId !== 'string' || !/^[a-f\d]{24}$/i.test(content.mediaId.trim())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${blockType} bot blocks require a valid mediaId.`,
+        path: ['content', 'mediaId'],
+      });
     }
   }
 
@@ -108,11 +119,11 @@ const validateFlowContentStructure = (
         });
       }
 
-      if (typeof card.mediaUrl !== 'string' || card.mediaUrl.trim().length === 0) {
+      if (typeof card.mediaId !== 'string' || !/^[a-f\d]{24}$/i.test(card.mediaId.trim())) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `Carousel card ${index + 1} requires mediaUrl.`,
-          path: ['content', 'cards', index, 'mediaUrl'],
+          message: `Carousel card ${index + 1} requires a valid mediaId.`,
+          path: ['content', 'cards', index, 'mediaId'],
         });
       }
 
@@ -258,12 +269,6 @@ export const publishBotCanvasSchema = z.object({
   ]),
 });
 
-export const botCanvasParamsSchema = z.object({
-  params: z.object({
-    canvasId: objectIdSchema,
-  }),
-});
-
 const draftCanvasStateSchema = z
   .object({
     version: z.number().positive().optional(),
@@ -272,26 +277,7 @@ const draftCanvasStateSchema = z
   })
   .passthrough();
 
-export const createBotCanvasSchema = z.object({
-  body: z.object({
-    name: z.string().trim().min(1).max(120).optional(),
-    draftState: draftCanvasStateSchema.optional(),
-  }),
-});
-
-export const updateBotCanvasSchema = z.object({
-  params: z.object({
-    canvasId: objectIdSchema,
-  }),
-  body: z.object({
-    name: z.string().trim().min(1).max(120).optional(),
-  }),
-});
-
 export const updateBotCanvasDraftSchema = z.object({
-  params: z.object({
-    canvasId: objectIdSchema,
-  }),
   body: z.union([
     z.object({
       draftState: draftCanvasStateSchema,
@@ -301,9 +287,6 @@ export const updateBotCanvasDraftSchema = z.object({
 });
 
 export const publishBotCanvasDraftSchema = z.object({
-  params: z.object({
-    canvasId: objectIdSchema,
-  }),
   body: z
     .union([
       z.object({
@@ -316,17 +299,15 @@ export const publishBotCanvasDraftSchema = z.object({
 });
 
 export const patchBotSettingsSchema = z.object({
-  body: z.object({
-    isBotEnabled: z.boolean().optional(),
-    isAiEnabled: z.boolean().optional(),
-    systemPrompt: z.string().trim().max(12000).optional(),
-    defaultTriggerKey: z.string().trim().min(1).max(80).transform((value) => value.toUpperCase()).optional(),
-    greetingKeywords: z.array(z.string().trim().min(1)).max(50).optional(),
-    optOutKeywords: z.array(z.string().trim().min(1)).max(50).optional(),
-    escalationTriggerIds: z.array(z.string().trim().min(1)).max(100).optional(),
-    autoTimeoutMinutes: z.number().int().min(5).max(1440).optional(),
-    geminiModel: z.string().trim().min(1).max(120).optional(),
-  }),
+  body: z
+    .object({
+      isBotEnabled: z.boolean().optional(),
+      isAiEnabled: z.boolean().optional(),
+      greetingKeywords: z.array(z.string().trim().min(1)).max(50).optional(),
+      optOutKeywords: z.array(z.string().trim().min(1)).max(50).optional(),
+      escalationTriggerIds: z.array(z.string().trim().min(1)).max(100).optional(),
+    })
+    .strict(),
 });
 
 export const createKnowledgeTextSchema = z.object({
