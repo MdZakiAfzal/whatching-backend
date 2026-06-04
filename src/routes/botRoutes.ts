@@ -33,7 +33,7 @@ router.post('/knowledge-sources/text', validate(createKnowledgeTextSchema), botC
 router.post(
   '/knowledge-sources/upload',
   optionalSingleAttachmentUpload('file'),
-  botController.uploadKnowledgeSource
+  botController.uploadKnowledgeSource 
 );
 router.delete(
   '/knowledge-sources/:sourceId',

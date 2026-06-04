@@ -18,6 +18,7 @@ export interface AgentReplyJobData {
     mimeType: string;
     originalFilename?: string;
     publicId?: string;
+    mediaId?: string;
   };
   initiatedBy: string;
   traceId: string;

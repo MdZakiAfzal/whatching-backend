@@ -12,6 +12,7 @@ import { logIntegrationAction } from '../services/integrationLogService';
 import { upsertSubscriber } from '../services/subscriberService';
 import Conversation from '../models/Conversation';
 import Subscriber from '../models/Subscriber';
+import Media from '../models/Media';
 import { getMessagingBillingState } from '../utils/messagingBilling';
 import { trackMessagingUsage } from '../services/usageService';
 import { uploadAgentReplyAttachment } from '../services/mediaService';
@@ -32,6 +33,16 @@ type UploadedAttachment = {
   mimetype: string;
 };
 
+type AgentReplyAttachment = {
+  mediaUrl: string;
+  mimeType: string;
+  originalFilename?: string;
+  publicId?: string;
+  mediaId?: string;
+};
+
+const objectIdPattern = /^[a-f\d]{24}$/i;
+
 const deriveAttachmentMessageType = (
   file: UploadedAttachment,
   requestedType?: string
@@ -50,6 +61,14 @@ const deriveAttachmentMessageType = (
 
   if (file.mimetype.startsWith('video/')) {
     return 'video';
+  }
+
+  return 'document';
+};
+
+const deriveMediaLibraryMessageType = (fileType: string): AgentReplyMessageType => {
+  if (fileType === 'image' || fileType === 'video') {
+    return fileType;
   }
 
   return 'document';
@@ -239,6 +258,7 @@ export const getMessage = catchAsync(async (req: any, res: Response, next: NextF
 export const sendAgentReply = catchAsync(async (req: any, res: Response, next: NextFunction) => {
   const text = typeof req.body.text === 'string' ? req.body.text.trim() : '';
   const rawCaption = typeof req.body.caption === 'string' ? req.body.caption.trim() : '';
+  const mediaId = typeof req.body.mediaId === 'string' ? req.body.mediaId.trim() : '';
   const uploadedFile = req.file as UploadedAttachment | undefined;
   const org = req.org;
 
@@ -274,27 +294,55 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
     );
   }
 
-  if (!uploadedFile && !text) {
-    return next(new AppError('Reply text is required when no attachment is uploaded.', 400));
+  if (uploadedFile && mediaId) {
+    return next(new AppError('Send either an uploaded file or an existing mediaId, not both.', 400));
+  }
+
+  if (mediaId && !objectIdPattern.test(mediaId)) {
+    return next(new AppError('A valid Media ID is required.', 400));
+  }
+
+  if (!uploadedFile && !mediaId && !text) {
+    return next(new AppError('Reply text or mediaId is required when no attachment is uploaded.', 400));
+  }
+
+  const mediaAsset = mediaId
+    ? await Media.findOne({
+        _id: mediaId,
+        orgId: org._id,
+      })
+    : null;
+
+  if (mediaId && !mediaAsset) {
+    return next(new AppError('Media asset not found for this organization.', 404));
   }
 
   const messageType: AgentReplyMessageType = uploadedFile
     ? deriveAttachmentMessageType(uploadedFile, req.body.messageType)
-    : 'text';
+    : mediaAsset
+      ? deriveMediaLibraryMessageType(mediaAsset.fileType)
+      : 'text';
   const caption = messageType === 'text' ? '' : rawCaption || text;
 
   if (messageType === 'text' && !text) {
     return next(new AppError('Reply text is required for text messages.', 400));
   }
 
-  const attachment = uploadedFile
+  const attachment: AgentReplyAttachment | undefined = uploadedFile
     ? await uploadAgentReplyAttachment({
         orgId: String(org._id),
         buffer: uploadedFile.buffer,
         originalName: uploadedFile.originalname,
         mimeType: uploadedFile.mimetype,
       })
-    : undefined;
+    : mediaAsset
+      ? {
+          mediaUrl: mediaAsset.cloudinaryUrl,
+          mimeType: mediaAsset.fileType,
+          originalFilename: mediaAsset.name,
+          mediaId: String(mediaAsset._id),
+        }
+      : undefined;
 
   const latestInboundMessage = await Message.findOne({
     orgId: org._id,
@@ -339,6 +387,7 @@ export const sendAgentReply = catchAsync(async (req: any, res: Response, next: N
                 mimeType: attachment.mimeType,
                 filename: attachment.originalFilename,
                 publicId: attachment.publicId,
+                mediaId: attachment.mediaId,
               }
             : {}),
         },

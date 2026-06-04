@@ -84,6 +84,7 @@ const markReplySent = async (data: AgentReplyJobData, metaMessageId: string) => 
             mimeType: data.attachment.mimeType,
             filename: data.attachment.originalFilename,
             publicId: data.attachment.publicId,
+            mediaId: data.attachment.mediaId,
       }
         : {}),
       to: data.subscriberPhone,
